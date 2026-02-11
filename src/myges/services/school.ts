@@ -16,6 +16,6 @@ export class SchoolService extends BaseService {
   }
 
   static getClassmates(credentials: GesAuthenticationToken, classId: number) {
-    return this.get(credentials, `/classes/${classId}/students`);
+    return this.get(credentials, `/me/classes/${classId}/students`);
   }
 }

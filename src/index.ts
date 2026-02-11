@@ -1,4 +1,10 @@
-import {ActivityType, Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, ComponentType, TextChannel, ButtonBuilder, ButtonStyle } from 'discord.js';
+import { 
+    ActivityType, Client, GatewayIntentBits, REST, Routes, 
+    SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, 
+    StringSelectMenuBuilder, StringSelectMenuOptionBuilder, 
+    ComponentType, TextChannel, ButtonBuilder, ButtonStyle,
+    Events, MessageFlags, AttachmentBuilder
+} from 'discord.js';
 import * as dotenv from 'dotenv';
 import * as fs from 'fs';
 import { GesAPI } from './myges/ges-api'; 
@@ -7,6 +13,7 @@ import { ProfileService } from './myges/services/profile';
 import { ProjectService } from './myges/services/project';
 import { SchoolService } from './myges/services/school';
 import { encrypt, decrypt } from './crypto'; 
+import { connect } from 'http2';
 
 dotenv.config();
 
@@ -15,7 +22,7 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 // CONFIGURATION
 const CURRENT_YEAR = '2025'; 
 const CHECK_INTERVAL = 60 * 60 * 1000; 
-const ANNOUNCEMENT_CHANNEL_ID = '1468606122905571523'; // ID du channel Discord pour les annonces
+const ANNOUNCEMENT_CHANNEL_ID = '1420030852154392709'; // ID du channel Discord pour les annonces
 const DB_FILE = './saved_data.json';
 
 // --- GESTION DES DONNÉES ---
@@ -67,6 +74,14 @@ function getNextStep(project: any) {
     };
 }
 
+function formatToFrenchTime(date: Date) {
+    return date.toLocaleTimeString('fr-FR', { 
+        hour: '2-digit', 
+        minute: '2-digit', 
+        timeZone: 'Europe/Paris' 
+    });
+}
+
 // --- FONCTION STATUT DYNAMIQUE (Intelligente) ---
 async function updateBotStatus() {
     const userId = sessions.keys().next().value;
@@ -107,13 +122,14 @@ async function updateBotStatus() {
             else {
                 const minutesLeft = Math.ceil(diffMs / 60000);
                 const nom = next.name.replace(/^T\d+\s-\s/i, '').substring(0, 30); 
-                let timeDisplay = `${minutesLeft} min`;
-                if (minutesLeft > 60) timeDisplay = `${Math.floor(minutesLeft/60)}h${minutesLeft%60}`;
+                let timeDisplay = minutesLeft > 60 
+                    ? `${Math.floor(minutesLeft/60)}h${(minutesLeft%60).toString().padStart(2, '0')}` 
+                    : `${minutesLeft}min`;
 
                 client.user?.setPresence({
-                    status: 'online', // Le streaming force le violet, mais on met online par précaution
+                    status: 'online',
                     activities: [{ 
-                        name: `${nom} (dans ${timeDisplay})`, 
+                        name: `${next.name.replace(/^T\d+\s-\s/i, '').substring(0, 30)} (dans ${timeDisplay})`, 
                         type: ActivityType.Streaming, 
                         url: "https://www.twitch.tv/discord" 
                     }]
@@ -202,10 +218,12 @@ const commands = [
     new SlashCommandBuilder().setName('profil').setDescription('Mon profil'),
     new SlashCommandBuilder().setName('news').setDescription('Dernières actualités de l\'école'),
     new SlashCommandBuilder().setName('profs').setDescription('Liste de mes professeurs'),
+    new SlashCommandBuilder().setName('trombi').setDescription('Affiche le trombinoscope de ta classe'),
+    new SlashCommandBuilder().setName('changelog').setDescription('Affiche les dernières nouveautés du bot (v2.0)'),
 ].map(c => c.toJSON());
 
 // --- INIT ---
-client.once('ready', async () => {
+client.once(Events.ClientReady, async () => {
     console.log(`🤖 Bot connecté : ${client.user?.tag}`);
     await autoLoginUsers();
     updateBotStatus(); // Lancement immédiat
@@ -221,7 +239,7 @@ client.on('interactionCreate', async interaction => {
     const { commandName } = interaction;
 
     if (commandName === 'login') {
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         try {
             const token = await GesAPI.login(interaction.options.getString('user', true), interaction.options.getString('pass', true)); 
             sessions.set(interaction.user.id, token);
@@ -236,13 +254,13 @@ client.on('interactionCreate', async interaction => {
     if (commandName === 'logout') {
         sessions.delete(interaction.user.id);
         const data = loadData(); delete data.users[interaction.user.id]; saveData(data);
-        await interaction.reply({ content: "👋 Déconnecté.", ephemeral: true });
+        await interaction.reply({ content: "👋 Déconnecté.", flags: MessageFlags.Ephemeral });
     }
 
     if (commandName === 'profil') {
         const token = sessions.get(interaction.user.id);
-        if (!token) return interaction.reply({ content: "❌ Pas connecté.", ephemeral: true });
-        await interaction.deferReply({ ephemeral: true });
+        if (!token) return interaction.reply({ content: "❌ Pas connecté.", flags: MessageFlags.Ephemeral });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         try {
             const p = await ProfileService.getProfile(token);
             const embed = new EmbedBuilder().setTitle(`👤 ${p.firstname} ${p.name}`).setColor(0x5865F2).setThumbnail(p._links?.photo?.href || null).addFields({ name: "Email", value: p.email }, { name: "Classe", value: p.classes?.map((c:any)=>c.name).join(', ')||"?" });
@@ -252,7 +270,7 @@ client.on('interactionCreate', async interaction => {
 
     // --- PROCHAIN COURS ---
     if (commandName === 'prochain') {
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const token = sessions.get(interaction.user.id);
         if (!token) return interaction.editReply("❌ Connecte-toi d'abord.");
 
@@ -299,7 +317,7 @@ client.on('interactionCreate', async interaction => {
                     { name: '⏰ Horaire', value: `<t:${timestamp}:t>`, inline: true }, // Affiche "10:30"
                     { name: '⏳ Début', value: `<t:${timestamp}:R>`, inline: true }   // Affiche "dans 15 minutes"
                 )
-                .setFooter({ text: `Fin du cours à ${dateFin.toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'})}` });
+                .setFooter({ text: `Fin du cours à ${formatToFrenchTime(dateFin)}` });
 
             await interaction.editReply({ embeds: [embed] });
 
@@ -310,88 +328,284 @@ client.on('interactionCreate', async interaction => {
     }
 
     if (commandName === 'agenda') {
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const token = sessions.get(interaction.user.id);
-        if (!token) return interaction.editReply("❌ Connecte-toi.");
+        if (!token) return interaction.editReply("❌ Connecte-toi d'abord.");
+
+        // Fonction pour formater l'heure HH:MM (Paris)
+        const formatTime = (dateStr: number | string) => {
+            return new Date(dateStr).toLocaleTimeString('fr-FR', {
+                hour: '2-digit', 
+                minute: '2-digit',
+                timeZone: 'Europe/Paris'
+            });
+        };
 
         const generateAgenda = async (offset: number) => {
+            // Calcul de la semaine (Lundi à Dimanche)
             const today = new Date();
-            const start = new Date(today); start.setDate(start.getDate() - start.getDay() + 1 + (offset * 7)); start.setHours(0,0,0,0);
-            const end = new Date(start); end.setDate(end.getDate() + 6); end.setHours(23,59,59);
+            const start = new Date(today);
+            const dayOfWeek = start.getDay(); // 0 (Dim) - 6 (Sam)
+            const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek; // Si Dimanche, on recule de 6 jours, sinon on va à Lundi
+            
+            start.setDate(start.getDate() + diffToMonday + (offset * 7));
+            start.setHours(0, 0, 0, 0);
+
+            const end = new Date(start);
+            end.setDate(end.getDate() + 6);
+            end.setHours(23, 59, 59);
 
             try {
                 const cours = await TimetableService.getTimetable(token, start, end);
-                cours.sort((a:any, b:any) => a.start_date - b.start_date);
-                const embed = new EmbedBuilder().setTitle(`📅 Semaine du ${start.toLocaleDateString('fr-FR')}`).setColor(0x2B2D31);
+                
+                // Tri chronologique
+                cours.sort((a: any, b: any) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime());
 
-                if (!cours.length) embed.setDescription("🏖️ **Aucun cours**.");
-                else {
-                    const days: any = {};
-                    cours.forEach((c:any) => {
-                        const d = new Date(c.start_date).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
-                        const dc = d.charAt(0).toUpperCase() + d.slice(1);
-                        if(!days[dc]) days[dc] = []; days[dc].push(c);
+                const embed = new EmbedBuilder()
+                    .setTitle(`📅 Emploi du temps`)
+                    .setDescription(`Semaine du **${start.toLocaleDateString('fr-FR')}** au **${end.toLocaleDateString('fr-FR')}**`)
+                    .setColor(0x2B2D31)
+                    .setTimestamp();
+
+                if (!cours.length) {
+                    embed.setDescription("🏖️ **Aucun cours cette semaine !** Profites-en.");
+                    embed.setImage("https://media.giphy.com/media/l0HlHFRbmaZtBRhXG/giphy.gif"); // Optionnel : petit GIF vacances
+                } else {
+                    // Regroupement par Jour
+                    const days: { [key: string]: any[] } = {};
+                    
+                    cours.forEach((c: any) => {
+                        const dateObj = new Date(c.start_date);
+                        // Format: "Lundi 10 Février"
+                        const dayKey = dateObj.toLocaleDateString('fr-FR', { 
+                            weekday: 'long', 
+                            day: 'numeric', 
+                            month: 'long',
+                            timeZone: 'Europe/Paris'
+                        });
+                        // Capitalisation (lundi -> Lundi)
+                        const dayCap = dayKey.charAt(0).toUpperCase() + dayKey.slice(1);
+                        
+                        if (!days[dayCap]) days[dayCap] = [];
+                        days[dayCap].push(c);
                     });
-                    for(const [day, list] of Object.entries(days)) {
-                        let txt = "";
-                        const l = list as any[];
-                        for(let k=0; k<l.length; k++){
-                            const c = l[k];
-                            let eStr = new Date(c.end_date).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
-                            while(k+1 < l.length && l[k+1].name === c.name && l[k+1].type === c.type) { eStr = new Date(l[k+1].end_date).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}); k++; }
-                            const salle = c.rooms?.[0]?.name || 'Non défini';
-                            const icon = (salle.toLowerCase().includes('distanciel')||salle.toLowerCase().includes('teams')) ? '🏠' : '🏫';
-                            txt += `\`${new Date(c.start_date).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})} - ${eStr}\` ${icon} **${c.name.replace(/^T\d+\s-\s/i, '')}**\n╰ 📍 *${salle}*\n\n`;
-                        }
-                        embed.addFields({ name: `📆 ${day}`, value: txt });
+
+                    // Construction des champs
+                    for (const [dayName, dayCourses] of Object.entries(days)) {
+                        let dayContent = "";
+
+                        // Fusion visuelle des cours qui se suivent (optionnel, ici on liste tout proprement)
+                        (dayCourses as any[]).forEach((c) => {
+                            // Heures
+                            const sStr = formatTime(c.start_date);
+                            const eStr = formatTime(c.end_date);
+
+                            // Nom du cours nettoyé (Enlever T1/T2...)
+                            let courseName = c.name.replace(/^(T\d+\s-\s)/i, '').trim();
+                            
+                            // Lieu / Modalité
+                            let location = "Salle inconnue";
+                            let icon = "🏫"; // Par défaut
+
+                            if (c.modality === 'Distanciel') {
+                                location = "Distanciel";
+                                icon = "🏠";
+                            } else if (c.rooms && c.rooms.length > 0) {
+                                location = c.rooms[0].name;
+                            }
+
+                            // Professeur
+                            const prof = c.teacher ? ` • 👨‍🏫 ${c.teacher.replace('M. ', '').replace('Mme ', '')}` : "";
+                            dayContent += `\`${sStr} - ${eStr}\` ${icon} **${courseName}**\n└ *${location}${prof}*\n\n`;
+                        });
+
+                        embed.addFields({ name: `📆 ${dayName}`, value: dayContent });
                     }
                 }
                 return embed;
-            } catch (e) { return new EmbedBuilder().setTitle("Erreur").setDescription("Erreur agenda."); }
+            } catch (e) {
+                console.error(e);
+                return new EmbedBuilder().setTitle("Erreur").setDescription("Impossible de récupérer l'agenda.").setColor(0xFF0000);
+            }
         };
 
         let off = 0;
-        const getBtns = (o:number) => new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setCustomId('prev').setLabel('⬅️').setStyle(ButtonStyle.Primary), new ButtonBuilder().setCustomId('today').setLabel('Aujourd\'hui').setStyle(ButtonStyle.Secondary).setDisabled(o===0), new ButtonBuilder().setCustomId('next').setLabel('➡️').setStyle(ButtonStyle.Primary));
-        const msg = await interaction.editReply({ embeds: [await generateAgenda(off)], components: [getBtns(off)] });
+        
+        // Boutons de navigation
+        const getBtns = (o: number) => new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder().setCustomId('prev_week').setLabel('⬅️ Semaine préc.').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('today_week').setLabel('Aujourd\'hui').setStyle(ButtonStyle.Primary).setDisabled(o === 0),
+            new ButtonBuilder().setCustomId('next_week').setLabel('Semaine suiv. ➡️').setStyle(ButtonStyle.Secondary)
+        );
+
+        const msg = await interaction.editReply({ 
+            embeds: [await generateAgenda(off)], 
+            components: [getBtns(off)] 
+        });
+
         const col = msg.createMessageComponentCollector({ componentType: ComponentType.Button, time: 60000 });
+
         col.on('collect', async i => {
-            if(i.user.id !== interaction.user.id) return i.reply({content:'Non.', ephemeral:true});
-            await i.deferUpdate();
-            if(i.customId==='prev') off--; else if(i.customId==='next') off++; else off=0;
-            await interaction.editReply({ embeds: [await generateAgenda(off)], components: [getBtns(off)] });
+            if (i.user.id !== interaction.user.id) return i.reply({ content: 'Pas ton agenda !', flags: MessageFlags.Ephemeral });
+            
+            await i.deferUpdate(); // Important pour ne pas bloquer le bouton
+
+            if (i.customId === 'prev_week') off--;
+            else if (i.customId === 'next_week') off++;
+            else if (i.customId === 'today_week') off = 0;
+
+            await interaction.editReply({ 
+                embeds: [await generateAgenda(off)], 
+                components: [getBtns(off)] 
+            });
         });
     }
 
     if (commandName === 'notes') {
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const token = sessions.get(interaction.user.id);
-        if (!token) return interaction.editReply("❌ Connecte-toi.");
-        try {
-            const grades = await ProfileService.getGrades(token, CURRENT_YEAR);
-            if (!grades.length) return interaction.editReply("Aucune note.");
-            const sems = [...new Set(grades.map((g:any) => g.trimester_name))];
-            const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder().setCustomId('sem').setPlaceholder('Semestre...').addOptions(sems.map((s:any)=>({label:s||'Autre',value:s||'Autre',emoji:'🎓'}))));
+        if (!token) return interaction.editReply("❌ Connecte-toi d'abord.");
 
-            const resp = await interaction.editReply({ content: "Choisis :", components: [row] });
-            const col = resp.createMessageComponentCollector({ componentType: ComponentType.StringSelect, time: 60000 });
-            col.on('collect', async i => {
-                if(i.user.id !== interaction.user.id) return;
-                await i.deferUpdate();
-                const sel = grades.filter((g:any) => g.trimester_name === i.values[0]);
-                const embed = new EmbedBuilder().setTitle(`🎓 Bulletin - ${i.values[0]}`).setColor(0x5865F2);
-                sel.forEach((g:any) => {
-                    const avg = g.average ? `**${g.average}/20**` : "En cours";
-                    const prof = g.teacher_last_name || "Inconnu";
-                    const abs = g.absences > 0 ? `🚫 ${g.absences} abs.` : `✅ 0`;
-                    embed.addFields({ name: `📘 ${(g.course||'Inconnu').replace(/^T\d+\s-\s/i, '')}`, value: `> 📊 Moyenne : ${avg}\n> 📝 CC : ${g.ccaverage??"-"} | 🎓 Exam : ${g.exam??"-"}\n> 👨‍🏫 ${prof} • ${abs}`, inline: false });
-                });
-                await interaction.editReply({ content: null, embeds: [embed], components: [row] });
+        try {
+            const grades: any[] = await ProfileService.getGrades(token, CURRENT_YEAR);
+            if (!grades || grades.length === 0) return interaction.editReply("Aucune note disponible.");
+
+            const sems = [...new Set(grades.map((g: any) => g.trimester_name))].filter(Boolean);
+            
+            // Menu de sélection du semestre
+            const selectMenu = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+                new StringSelectMenuBuilder()
+                    .setCustomId('sem_select')
+                    .setPlaceholder('📅 Choisis ton trimestre')
+                    .addOptions(sems.map((s: any) => ({ label: s, value: s, emoji: '🎓' })))
+            );
+
+            const initialMsg = await interaction.editReply({ 
+                content: "Veuillez sélectionner un trimestre :", 
+                components: [selectMenu] 
             });
-        } catch(e) { console.error(e); }
+
+            const menuCollector = initialMsg.createMessageComponentCollector({ 
+                componentType: ComponentType.StringSelect, 
+                time: 60000 
+            });
+
+            menuCollector.on('collect', async menuInter => {
+                if (menuInter.user.id !== interaction.user.id) return;
+                
+                const semesterName = menuInter.values[0];
+                const selectedGrades = grades.filter((g: any) => g.trimester_name === semesterName);
+                
+                // Tri par nom de matière
+                selectedGrades.sort((a, b) => (a.course || "").localeCompare(b.course || ""));
+
+                let index = 0;
+
+                // --- FONCTION GÉNÉRATION DE LA CARTE ---
+                const generateGradeCard = (i: number) => {
+                    const g = selectedGrades[i];
+                    
+                    // Nettoyage du nom (ex: "T1 - anglais" -> "Anglais")
+                    const courseName = (g.course || "Matière inconnue").replace(/^T\d+\s-\s/i, '');
+                    const prof = g.teacher_last_name ? `👨‍🏫 ${g.teacher_first_name || ""} ${g.teacher_last_name}` : "";
+
+                    // Calcul de la couleur selon la moyenne
+                    let color = 0x95A5A6; // Gris par défaut
+                    let mention = "";
+                    let avgDisplay = "N/A";
+
+                    // On utilise g.average s'il existe (note finale validée)
+                    // Sinon on regarde s'il y a une moyenne CC (ccaverage)
+                    let finalNote = g.average;
+                    
+                    if (finalNote !== null && finalNote !== undefined) {
+                        const note = parseFloat(finalNote);
+                        avgDisplay = `${note.toFixed(2)}/20`;
+                        if (note >= 16) { color = 0xF1C40F; mention = "🏆 Excellent"; }
+                        else if (note >= 14) { color = 0x2ECC71; mention = "✅ Bien"; }
+                        else if (note >= 10) { color = 0x0099FF; mention = "👌 Validé"; }
+                        else { color = 0xE74C3C; mention = "⚠️ Rattrapage"; }
+                    } else if (g.ccaverage > 0) {
+                         // Si pas de moyenne générale mais une moyenne CC
+                         avgDisplay = `~${g.ccaverage}/20 (CC)`;
+                         color = 0x3498DB; // Bleu (En cours)
+                    }
+
+                    // --- LOGIQUE D'AFFICHAGE DES NOTES CC (TABLEAU DE NOMBRES) ---
+                    let ccContent = "-";
+                    
+                    if (g.grades && Array.isArray(g.grades) && g.grades.length > 0) {
+                        // Ici g.grades = [12.5, 14, 8] par exemple
+                        const details = g.grades.map((val: number, idx: number) => {
+                            return `• Note ${idx + 1} : **${val}/20**`;
+                        }).join('\n');
+                        
+                        ccContent = `${details}\n\n👉 **Moy. CC : ${g.ccaverage ?? "?"}/20**`;
+                    } else if (g.ccaverage !== null && g.ccaverage !== 0) {
+                        ccContent = `**${g.ccaverage}/20**`;
+                    } else {
+                        ccContent = "Aucune note";
+                    }
+
+                    // Absences
+                    const absText = g.absences > 0 ? `🚫 **${g.absences}** abs.` : "✅ 0";
+
+                    const embed = new EmbedBuilder()
+                        .setTitle(`📘 ${courseName}`)
+                        .setDescription(`${prof}\n*${semesterName}*`)
+                        .setColor(color)
+                        .addFields(
+                            { name: '📊 Moyenne Générale', value: `# ${avgDisplay}\n${mention}`, inline: false },
+                            { name: '📝 Contrôle Continu', value: ccContent, inline: true },
+                            { name: '🎓 Examen Final', value: g.exam ? `**${g.exam}/20**` : "-", inline: true },
+                            { name: 'Assiduité', value: absText, inline: true }
+                        )
+                        .setFooter({ text: `Matière ${i + 1} / ${selectedGrades.length} • Crédits: ${g.ects || "?"}` });
+
+                    return embed;
+                };
+
+                const getNavButtons = (idx: number) => new ActionRowBuilder<ButtonBuilder>().addComponents(
+                    new ButtonBuilder().setCustomId('prev_g').setLabel('⬅️').setStyle(ButtonStyle.Secondary).setDisabled(idx === 0),
+                    new ButtonBuilder().setCustomId('next_g').setLabel('➡️').setStyle(ButtonStyle.Secondary).setDisabled(idx === selectedGrades.length - 1)
+                );
+
+                await menuInter.update({ 
+                    content: null, 
+                    embeds: [generateGradeCard(index)], 
+                    components: [getNavButtons(index)] 
+                });
+
+                const buttonCollector = initialMsg.createMessageComponentCollector({ 
+                    componentType: ComponentType.Button, 
+                    time: 120000 
+                });
+
+                buttonCollector.on('collect', async btnInter => {
+                    if (btnInter.user.id !== interaction.user.id) return btnInter.reply({ content: "Non.", flags: MessageFlags.Ephemeral });
+                    await btnInter.deferUpdate();
+
+                    if (btnInter.customId === 'prev_g') index--;
+                    else if (btnInter.customId === 'next_g') index++;
+
+                    if (index < 0) index = 0;
+                    if (index >= selectedGrades.length) index = selectedGrades.length - 1;
+
+                    await interaction.editReply({
+                        embeds: [generateGradeCard(index)],
+                        components: [getNavButtons(index)]
+                    });
+                });
+            });
+
+        } catch(e) { 
+            console.error(e); 
+            interaction.editReply("❌ Erreur notes."); 
+        }
     }
 
     if (commandName === 'absences') {
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const token = sessions.get(interaction.user.id);
         if (!token) return interaction.editReply("❌ Connecte-toi.");
         const abs = await ProfileService.getAbsences(token, CURRENT_YEAR);
@@ -403,7 +617,7 @@ client.on('interactionCreate', async interaction => {
 
     // --- PROJETS (AVEC LOGIQUE DES ÉTAPES) ---
     if (commandName === 'projets') {
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const token = sessions.get(interaction.user.id);
         if (!token) return interaction.editReply("❌ Connecte-toi.");
 
@@ -452,7 +666,7 @@ client.on('interactionCreate', async interaction => {
     }
 
     if (commandName === 'news') {
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const token = sessions.get(interaction.user.id);
         if (!token) return interaction.editReply("❌ Connecte-toi.");
 
@@ -479,32 +693,250 @@ client.on('interactionCreate', async interaction => {
         } catch (e) { console.error(e); interaction.editReply("❌ Erreur news."); }
     }
 
+    // --- PROFS (MODE TROMBINOSCOPE) ---
     if (commandName === 'profs') {
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const token = sessions.get(interaction.user.id);
-        if (!token) return interaction.editReply("❌ Connecte-toi.");
+        if (!token) return interaction.editReply("❌ Connecte-toi d'abord.");
 
         try {
-            const teachers: any = await SchoolService.getTeachers(token, CURRENT_YEAR);
+            const teachers: any[] = await SchoolService.getTeachers(token, CURRENT_YEAR);
             
-            if (!teachers || teachers.length === 0) return interaction.editReply("Aucun professeur trouvé.");
+            if (!teachers || teachers.length === 0) return interaction.editReply("Aucun professeur trouvé pour cette année.");
 
-            const embed = new EmbedBuilder().setTitle("👨‍🏫 Mes Professeurs").setColor(0xF1C40F); // Jaune
+            // Tri alphabétique par nom de famille
+            teachers.sort((a, b) => a.lastname.localeCompare(b.lastname));
 
-            // On regroupe par matière si possible, sinon liste simple
-            let desc = "";
-            teachers.forEach((t: any) => {
-                const nom = `${t.firstname} ${t.lastname}`.trim();
-                const email = t.email ? `📧 ${t.email}` : "";
-                desc += `**${nom}**\n${email}\n\n`;
+            let index = 0;
+
+            // Fonction d'affichage d'un prof
+            const showTeacher = async (i: number) => {
+                const t = teachers[i];
+                
+                // Extraction de l'URL de la photo (même structure que pour les élèves)
+                let photoUrl = null;
+                if (t.links && Array.isArray(t.links)) {
+                    const photoObj = t.links.find((l: any) => l.rel === 'photo');
+                    if (photoObj) photoUrl = photoObj.href;
+                }
+
+                let files: AttachmentBuilder[] = [];
+
+                const embed = new EmbedBuilder()
+                    .setTitle("👨‍🏫 Mes Professeurs")
+                    .setDescription(`Professeur ${i + 1}/${teachers.length}`)
+                    .setColor(0xF1C40F) // Jaune
+                    .addFields(
+                        { name: 'Nom', value: `**${t.firstname} ${t.lastname}**`, inline: true },
+                        { name: 'Email', value: t.email ? `📧 ${t.email}` : "Non renseigné", inline: false }
+                    )
+                    .setFooter({ text: `ID: ${t.uid || "N/A"}` });
+
+                // Gestion de l'image (Téléchargement sécurisé)
+                if (photoUrl) {
+                    try {
+                        // On tente d'abord en public, sinon avec le token
+                        let response = await fetch(photoUrl);
+                        
+                        if (!response.ok) {
+                            response = await fetch(photoUrl, {
+                                headers: { 'Authorization': `${token.token_type} ${token.access_token}` }
+                            });
+                        }
+
+                        if (response.ok) {
+                            const buffer = Buffer.from(await response.arrayBuffer());
+                            const attachment = new AttachmentBuilder(buffer, { name: 'teacher.jpg' });
+                            files = [attachment];
+                            embed.setImage('attachment://teacher.jpg');
+                        }
+                    } catch (err) {
+                        console.error("Erreur image prof:", err);
+                    }
+                } else {
+                    // Si pas de photo, on peut mettre une image par défaut ou rien
+                    // embed.setThumbnail('https://i.imgur.com/3Z5Q5z.png'); // Exemple d'avatar générique
+                }
+
+                const buttons = new ActionRowBuilder<ButtonBuilder>().addComponents(
+                    new ButtonBuilder().setCustomId('prev_t').setLabel('⬅️').setStyle(ButtonStyle.Primary).setDisabled(i === 0),
+                    new ButtonBuilder().setCustomId('next_t').setLabel('➡️').setStyle(ButtonStyle.Primary).setDisabled(i === teachers.length - 1)
+                );
+
+                return { embeds: [embed], components: [buttons], files: files };
+            };
+
+            // Premier affichage
+            const payload = await showTeacher(index);
+            const msg = await interaction.editReply(payload);
+
+            // Collecteur
+            const collector = msg.createMessageComponentCollector({ componentType: ComponentType.Button, time: 300000 }); // 5 min
+
+            collector.on('collect', async i => {
+                if (i.user.id !== interaction.user.id) return i.reply({ content: "Pas touche !", flags: MessageFlags.Ephemeral });
+                
+                await i.deferUpdate();
+
+                if (i.customId === 'prev_t') index--;
+                else if (i.customId === 'next_t') index++;
+
+                // Bornage
+                if (index < 0) index = 0;
+                if (index >= teachers.length) index = teachers.length - 1;
+
+                const newPayload = await showTeacher(index);
+                await interaction.editReply(newPayload);
             });
 
-            // Si c'est trop long pour une description, on coupe
-            if (desc.length > 4000) desc = desc.substring(0, 4000) + "...";
-            embed.setDescription(desc);
+        } catch (e) { 
+            console.error(e); 
+            interaction.editReply("❌ Erreur lors de la récupération des professeurs."); 
+        }
+    }
 
-            await interaction.editReply({ embeds: [embed] });
-        } catch (e) { console.error(e); interaction.editReply("❌ Erreur profs."); }
+    if (commandName === 'trombi') {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        const token = sessions.get(interaction.user.id);
+        if (!token) return interaction.editReply("❌ Connecte-toi d'abord.");
+
+        try {
+            // 1. Récupérer les classes
+            const classes: any[] = await SchoolService.getMyClasses(token, CURRENT_YEAR);
+            if (!classes || classes.length === 0) return interaction.editReply("❌ Aucune classe trouvée.");
+
+            const maClasse = classes[0];
+            const classId = maClasse.id || maClasse.class_id || maClasse.puid;
+            
+            // 2. Récupérer les élèves
+            const students: any[] = await SchoolService.getClassmates(token, classId);
+            if (!students || students.length === 0) return interaction.editReply("❌ Aucun élève trouvé.");
+
+            // Tri alphabétique
+            students.sort((a, b) => a.lastname.localeCompare(b.lastname));
+
+            let index = 0;
+
+            const showStudent = async (i: number) => {
+                const s = students[i];
+                
+                // --- CORRECTION DU PARSING ICI ---
+                // On cherche l'élément dans le tableau 'links' qui a rel === 'photo'
+                let photoUrl = null;
+                if (s.links && Array.isArray(s.links)) {
+                    const photoObj = s.links.find((l: any) => l.rel === 'photo');
+                    if (photoObj) photoUrl = photoObj.href;
+                }
+                
+                let files: AttachmentBuilder[] = [];
+
+                const embed = new EmbedBuilder()
+                    .setTitle(`📸 Trombinoscope - ${maClasse.name || "Classe"}`)
+                    .setDescription(`Étudiant ${i + 1}/${students.length}`)
+                    .setColor(0x0099FF)
+                    .addFields(
+                        { name: 'Nom', value: `**${s.firstname} ${s.lastname}**`, inline: true },
+                        { name: 'Email', value: s.email || "Non renseigné", inline: true }
+                    )
+                    .setFooter({ text: `ID: ${s.uid || "N/A"}` });
+
+                // TÉLÉCHARGEMENT DE L'IMAGE
+                if (photoUrl) {
+                    try {
+                        // Note : Comme l'URL contient "public", on essaie d'abord sans token
+                        // Si ça échoue, on pourrait réessayer avec, mais souvent "public" = accès direct.
+                        // Cependant, Discord a parfois du mal avec ces liens, donc on le télécharge nous-mêmes.
+                        const response = await fetch(photoUrl);
+
+                        if (response.ok) {
+                            const buffer = Buffer.from(await response.arrayBuffer());
+                            const attachment = new AttachmentBuilder(buffer, { name: 'profile.jpg' });
+                            files = [attachment];
+                            embed.setImage('attachment://profile.jpg');
+                        } else {
+                            // Fallback : Si l'accès public échoue, on tente avec le token
+                            const responseAuth = await fetch(photoUrl, {
+                                headers: { 'Authorization': `${token.token_type} ${token.access_token}` }
+                            });
+                            if (responseAuth.ok) {
+                                const buffer = Buffer.from(await responseAuth.arrayBuffer());
+                                const attachment = new AttachmentBuilder(buffer, { name: 'profile.jpg' });
+                                files = [attachment];
+                                embed.setImage('attachment://profile.jpg');
+                            }
+                        }
+                    } catch (err) {
+                        console.error("Erreur image:", err);
+                    }
+                }
+
+                const buttons = new ActionRowBuilder<ButtonBuilder>().addComponents(
+                    new ButtonBuilder().setCustomId('prev_s').setLabel('⬅️').setStyle(ButtonStyle.Primary).setDisabled(i === 0),
+                    new ButtonBuilder().setCustomId('next_s').setLabel('➡️').setStyle(ButtonStyle.Primary).setDisabled(i === students.length - 1)
+                );
+
+                return { embeds: [embed], components: [buttons], files: files };
+            };
+
+            const payload = await showStudent(index);
+            const msg = await interaction.editReply(payload);
+
+            const collector = msg.createMessageComponentCollector({ componentType: ComponentType.Button, time: 300000 });
+
+            collector.on('collect', async i => {
+                if (i.user.id !== interaction.user.id) return i.reply({ content: "Pas touche !", flags: MessageFlags.Ephemeral });
+                await i.deferUpdate();
+
+                if (i.customId === 'prev_s') index--;
+                else if (i.customId === 'next_s') index++;
+
+                if (index < 0) index = 0;
+                if (index >= students.length) index = students.length - 1;
+
+                const newPayload = await showStudent(index);
+                await interaction.editReply(newPayload);
+            });
+
+        } catch (e) {
+            console.error(e);
+            interaction.editReply("❌ Erreur technique.");
+        }
+    }
+
+
+
+    // --- CHANGELOG ---
+    if (commandName === 'changelog') {
+        // On met en ephemeral pour ne pas spammer le channel
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+        const embed = new EmbedBuilder()
+            .setTitle("📢 Mise à jour v2.0 - \"Visual Update\"")
+            .setDescription("Le bot fait peau neuve ! Voici les nouveautés déployées :")
+            .setColor(0xFF00FF) // Magenta
+            .setThumbnail(client.user?.displayAvatarURL() || null)
+            .addFields(
+                { 
+                    name: "📸 Trombinoscopes (/trombi & /profs)", 
+                    value: "> **Élèves & Profs** : Fini les listes tristes ! Affichez les profils un par un avec **photo**, email et navigation (⬅️ ➡️).\n> **Sécurisé** : Contournement de la protection des images MyGes." 
+                },
+                { 
+                    name: "📅 Agenda V2 (/agenda)", 
+                    value: "> **Vue par Jour** : Les cours sont maintenant regroupés par jour (Lundi, Mardi...).\n> **Visuel** : Design compact, icônes dynamiques (🏠 Distanciel / 🏫 Salle) et horaires alignés.\n> **Navigation** : Boutons pour changer de semaine facilement." 
+                },
+                { 
+                    name: "🎓 Bulletin & Notes (/notes)", 
+                    value: "> **Mode Carrousel** : Une matière par page pour plus de clarté.\n> **Code Couleur** : 🏆 Excellent (Or), ✅ Bien (Vert), 👌 Validé (Bleu), ⚠️ Rattrapage (Rouge).\n> **Détails** : Affichage des notes de Contrôle Continu (CC) et des absences." 
+                },
+                { 
+                    name: "⚙️ Technique & Correctifs", 
+                    value: "• **Timezone** : Correction du décalage d'heure (Fuseau Paris forcé).\n• **API** : Correction de l'erreur 404 sur les classes.\n• **Optimisation** : Mise à jour Discord.js (Support v15)." 
+                }
+            )
+            .setFooter({ text: "Merci d'utiliser le bot ! 🚀" })
+            .setTimestamp();
+
+        await interaction.editReply({ embeds: [embed] });
     }
 });
 
