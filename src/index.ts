@@ -25,6 +25,7 @@ const CURRENT_YEAR = '2025';
 const CHECK_INTERVAL = 60 * 60 * 1000; 
 const ANNOUNCEMENT_CHANNEL_ID = '1420030852154392709'; // ID du channel Discord pour les annonces
 const DB_FILE = './saved_data.json';
+const BOT_VERSION = 'v2.1.2';
 
 // --- GESTION DES DONNÉES ---
 interface EncryptedCreds { iv: string; content: string; }
@@ -81,98 +82,6 @@ function formatToFrenchTime(date: Date) {
         minute: '2-digit', 
         timeZone: 'Europe/Paris' 
     });
-}
-
-// --- FONCTION STATUT DYNAMIQUE (Format Jours / Heures) ---
-async function updateBotStatus() {
-    const userId = sessions.keys().next().value;
-    
-    // Si personne n'est co : Absent (Jaune) + "En attente"
-    if (!userId) {
-        return client.user?.setPresence({
-            status: 'idle', // 🌙 Absent
-            activities: [{ name: "En attente...", type: ActivityType.Playing }]
-        });
-    }
-
-    const token = sessions.get(userId);
-    const start = new Date();
-    const end = new Date(); 
-    end.setDate(end.getDate() + 14); // On regarde jusqu'à 2 semaines pour être sûr
-
-    try {
-        const cours = await TimetableService.getTimetable(token, start, end);
-        const now = Date.now();
-        
-        // On ne garde que les cours futurs
-        const futurs = cours.filter((c: any) => new Date(c.start_date).getTime() > now);
-        futurs.sort((a: any, b: any) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime());
-
-        if (futurs.length > 0) {
-            const next = futurs[0];
-            const diffMs = new Date(next.start_date).getTime() - now;
-            const diffHours = diffMs / (1000 * 60 * 60);
-            
-            if (diffHours > 72) {
-                client.user?.setPresence({
-                    status: 'idle', // 🌙 Met le point Jaune
-                    activities: [{ name: "Repos 😴", type: ActivityType.Listening }]
-                });
-            } 
-            else {
-                const minutesTotal = Math.ceil(diffMs / 60000);
-                let timeDisplay = "";
-
-                if (minutesTotal < 60) {
-                    // Moins d'une heure : "dans 45min"
-                    timeDisplay = `${minutesTotal}min`;
-                } else if (minutesTotal < 1440) { 
-                    // Moins de 24h : "dans 12h30"
-                    const h = Math.floor(minutesTotal / 60);
-                    const m = minutesTotal % 60;
-                    timeDisplay = `${h}h${m.toString().padStart(2, '0')}`;
-                } else {
-                    // Plus de 24h : "dans 1j 4h"
-                    const j = Math.floor(minutesTotal / 1440); // 1440 min = 24h
-                    const h = Math.floor((minutesTotal % 1440) / 60);
-                    
-                    if (h > 0) timeDisplay = `${j}j ${h}h`;
-                    else timeDisplay = `${j}j`;
-                }
-
-                // Nettoyage du nom du cours (pour pas que ça soit trop long)
-                // Ex: "T1 - JAVA (G1)" -> "JAVA"
-                let courseNameBase = next.name
-                    .replace(/^T\d+\s-\s/i, '') // Enleve "T1 - "
-                    .replace(/\(.*\)/g, '')     // Enleve "(G1)"
-                    .trim();
-
-                // 👇 AJOUT DES "..." SI TROP LONG (> 20 chars)
-                const MAX_LEN = 20;
-                let courseName = courseNameBase.length > MAX_LEN 
-                    ? courseNameBase.substring(0, MAX_LEN - 3) + "..." // Coupe à 17 + "..."
-                    : courseNameBase;
-
-                client.user?.setPresence({
-                    status: 'online',
-                    activities: [{ 
-                        // Le nom sera maintenant propre (ex: "Développement Web...")
-                        name: `${courseName} (dans ${timeDisplay})`, 
-                        type: ActivityType.Streaming, 
-                        url: "https://www.twitch.tv/discord" 
-                    }]
-                });
-            }
-        } else {
-            // Pas de cours du tout
-            client.user?.setPresence({
-                status: 'idle', 
-                activities: [{ name: "Vacances 🏖️", type: ActivityType.Listening }]
-            });
-        }
-    } catch (e) { 
-        console.error("Erreur statut:", e);
-    }
 }
 
 // --- RECONNEXION AUTO ---
@@ -256,12 +165,29 @@ const commands = [
 // --- INIT ---
 client.once(Events.ClientReady, async () => {
     console.log(`🤖 Bot connecté : ${client.user?.tag}`);
+
+    // 1. D'ABORD LE STATUT (Pour que ce soit instantané visuellement)
+    client.user?.setPresence({
+        status: 'online',
+        activities: [{ 
+            name: `MyGes ${BOT_VERSION}`, 
+            type: ActivityType.Playing 
+        }]
+    });
+
+    // 2. Ensuite on lance la logique lourde (Connexion MyGes)
+    console.log("🔄 Lancement de la reconnexion MyGes...");
     await autoLoginUsers();
-    updateBotStatus(); // Lancement immédiat
+
+    // 3. Enregistrement des commandes
     const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN!);
-    try { await rest.put(Routes.applicationCommands(client.user!.id), { body: commands }); } catch (e) { console.error(e); }
+    try { 
+        await rest.put(Routes.applicationCommands(client.user!.id), { body: commands }); 
+        console.log("✅ Commandes enregistrées.");
+    } catch (e) { console.error(e); }
+
+    // 4. Lancement des tâches de fond
     setInterval(checkNewProjects, CHECK_INTERVAL);
-    setInterval(updateBotStatus, 5 * 60 * 1000); // Mise à jour toutes les 5 min
 });
 
 // --- INTERACTIONS ---
@@ -299,9 +225,37 @@ client.on('interactionCreate', async interaction => {
         }
 
         if (commandName === 'logout') {
+            // 1. On vérifie d'abord si l'utilisateur est connecté
+            if (!sessions.has(interaction.user.id)) {
+                return interaction.reply({ 
+                    content: "❌ **Erreur :** Tu n'es pas connecté. Aucune donnée à supprimer.", 
+                    flags: MessageFlags.Ephemeral 
+                });
+            }
+
+            // 2. On supprime de la mémoire vive (Session active)
             sessions.delete(interaction.user.id);
-            const data = loadData(); delete data.users[interaction.user.id]; saveData(data);
-            await interaction.reply({ content: "👋 Déconnecté.", flags: MessageFlags.Ephemeral });
+
+            // 3. On supprime du disque (Fichier JSON)
+            const data = loadData();
+            if (data.users[interaction.user.id]) {
+                delete data.users[interaction.user.id];
+                saveData(data); // Sauvegarde immédiate
+            }
+
+            // 4. Message de confirmation rassurant
+            const embed = new EmbedBuilder()
+                .setTitle("👋 Déconnexion réussie")
+                .setDescription("Tes identifiants ont été **supprimés** de ma base de données.\nJe ne pourrai plus accéder à ton compte MyGes.")
+                .setColor(0xE74C3C) // Rouge (pour signifier l'arrêt/suppression)
+                .setThumbnail(interaction.user.displayAvatarURL())
+                .setFooter({ text: "À bientôt ! Utilise /login pour revenir." })
+                .setTimestamp();
+
+            await interaction.reply({ 
+                embeds: [embed], 
+                flags: MessageFlags.Ephemeral // Toujours en privé !
+            });
         }
 
         if (commandName === 'profil') {
@@ -1145,7 +1099,6 @@ client.on('interactionCreate', async interaction => {
 
                 // Premier check pour charger les données (projets, etc.)
                 checkNewProjects();
-                updateBotStatus();
 
             } catch (error) {
                 console.error(error);
