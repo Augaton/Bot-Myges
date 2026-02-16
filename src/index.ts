@@ -83,7 +83,7 @@ function formatToFrenchTime(date: Date) {
     });
 }
 
-// --- FONCTION STATUT DYNAMIQUE (Intelligente) ---
+// --- FONCTION STATUT DYNAMIQUE (Format Jours / Heures) ---
 async function updateBotStatus() {
     const userId = sessions.keys().next().value;
     
@@ -98,12 +98,13 @@ async function updateBotStatus() {
     const token = sessions.get(userId);
     const start = new Date();
     const end = new Date(); 
-    end.setDate(end.getDate() + 7);
+    end.setDate(end.getDate() + 14); // On regarde jusqu'à 2 semaines pour être sûr
 
     try {
         const cours = await TimetableService.getTimetable(token, start, end);
         const now = Date.now();
         
+        // On ne garde que les cours futurs
         const futurs = cours.filter((c: any) => new Date(c.start_date).getTime() > now);
         futurs.sort((a: any, b: any) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime());
 
@@ -112,34 +113,60 @@ async function updateBotStatus() {
             const diffMs = new Date(next.start_date).getTime() - now;
             const diffHours = diffMs / (1000 * 60 * 60);
             
-            // --- CAS 1 : REPOS (> 48h) ---
-            if (diffHours > 48) {
+            if (diffHours > 72) {
                 client.user?.setPresence({
-                    status: 'idle', // 🌙 Met le point Jaune (Absent)
+                    status: 'idle', // 🌙 Met le point Jaune
                     activities: [{ name: "Repos 😴", type: ActivityType.Listening }]
                 });
             } 
-            // --- CAS 2 : STREAMING (< 48h) ---
             else {
-                const minutesLeft = Math.ceil(diffMs / 60000);
-                const nom = next.name.replace(/^T\d+\s-\s/i, '').substring(0, 30); 
-                let timeDisplay = minutesLeft > 60 
-                    ? `${Math.floor(minutesLeft/60)}h${(minutesLeft%60).toString().padStart(2, '0')}` 
-                    : `${minutesLeft}min`;
+                const minutesTotal = Math.ceil(diffMs / 60000);
+                let timeDisplay = "";
+
+                if (minutesTotal < 60) {
+                    // Moins d'une heure : "dans 45min"
+                    timeDisplay = `${minutesTotal}min`;
+                } else if (minutesTotal < 1440) { 
+                    // Moins de 24h : "dans 12h30"
+                    const h = Math.floor(minutesTotal / 60);
+                    const m = minutesTotal % 60;
+                    timeDisplay = `${h}h${m.toString().padStart(2, '0')}`;
+                } else {
+                    // Plus de 24h : "dans 1j 4h"
+                    const j = Math.floor(minutesTotal / 1440); // 1440 min = 24h
+                    const h = Math.floor((minutesTotal % 1440) / 60);
+                    
+                    if (h > 0) timeDisplay = `${j}j ${h}h`;
+                    else timeDisplay = `${j}j`;
+                }
+
+                // Nettoyage du nom du cours (pour pas que ça soit trop long)
+                // Ex: "T1 - JAVA (G1)" -> "JAVA"
+                let courseNameBase = next.name
+                    .replace(/^T\d+\s-\s/i, '') // Enleve "T1 - "
+                    .replace(/\(.*\)/g, '')     // Enleve "(G1)"
+                    .trim();
+
+                // 👇 AJOUT DES "..." SI TROP LONG (> 20 chars)
+                const MAX_LEN = 20;
+                let courseName = courseNameBase.length > MAX_LEN 
+                    ? courseNameBase.substring(0, MAX_LEN - 3) + "..." // Coupe à 17 + "..."
+                    : courseNameBase;
 
                 client.user?.setPresence({
                     status: 'online',
                     activities: [{ 
-                        name: `${next.name.replace(/^T\d+\s-\s/i, '').substring(0, 30)} (dans ${timeDisplay})`, 
+                        // Le nom sera maintenant propre (ex: "Développement Web...")
+                        name: `${courseName} (dans ${timeDisplay})`, 
                         type: ActivityType.Streaming, 
                         url: "https://www.twitch.tv/discord" 
                     }]
                 });
             }
         } else {
-            // Pas de cours du tout : Absent
+            // Pas de cours du tout
             client.user?.setPresence({
-                status: 'idle', // 🌙
+                status: 'idle', 
                 activities: [{ name: "Vacances 🏖️", type: ActivityType.Listening }]
             });
         }
@@ -1086,7 +1113,7 @@ client.on('interactionCreate', async interaction => {
             await interaction.editReply({ embeds: [embed] });
         }
 
-        
+
     }
     else if (interaction.isModalSubmit()) { 
         if (interaction.customId === 'loginModal') {
