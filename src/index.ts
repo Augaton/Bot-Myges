@@ -27,13 +27,6 @@ const ANNOUNCEMENT_CHANNEL_ID = '1420030852154392709'; // ID du channel Discord 
 const DB_FILE = './saved_data.json';
 const BOT_VERSION = 'v2.1.2';
 
-// --- GESTION DES DONNÉES ---
-interface EncryptedCreds { iv: string; content: string; }
-interface SavedData {
-    users: { [discordId: string]: { user: EncryptedCreds, pass: EncryptedCreds } };
-    knownProjectIds: number[];
-}
-
 const sessions = new Map<string, any>();
 
 function loadData(): SavedData {
