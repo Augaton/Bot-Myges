@@ -31,7 +31,7 @@ const CURRENT_YEAR = '2025';
 const CHECK_INTERVAL = 60 * 60 * 1000; 
 const ANNOUNCEMENT_CHANNEL_ID = '1420030852154392709'; // ID du channel Discord pour les annonces
 const DB_FILE = './saved_data.json';
-const BOT_VERSION = 'v2.2.3';
+const BOT_VERSION = 'v2.2.5';
 
 const sessions = new Map<string, any>();
 
@@ -101,24 +101,49 @@ async function autoLoginUsers() {
 }
 
 // --- UTILITAIRE : Icone selon la matière ---
+// --- UTILITAIRE : Icone selon la matière (Version Étendue) ---
 function getCourseIcon(name: string, modality: string): string {
     const n = name.toLowerCase();
     
-    // Priorité au distanciel
+    // --- 1. MODALITÉS SPÉCIALES ---
     if (modality === 'Distanciel' || n.includes('distanciel')) return '🏠';
-    if (n.includes('examen') || n.includes('partiel') || n.includes('soutenance')) return '🔴';
+    if (n.includes('examen') || n.includes('partiel') || n.includes('soutenance') || n.includes('final')) return '🔴';
+    if (n.includes('rattrapage')) return '🆘';
 
-    // Détection par mot-clé
-    if (n.includes('java') || n.includes('spring')) return '☕';
-    if (n.includes('web') || n.includes('html') || n.includes('css') || n.includes('react') || n.includes('js')) return '🌐';
-    if (n.includes('c#') || n.includes('.net') || n.includes('cpp') || n.includes('c++')) return '🔷';
-    if (n.includes('python') || n.includes('data') || n.includes('ia ') || n.includes('intelligence')) return '🐍';
-    if (n.includes('projet') || n.includes('workshop')) return '🚀';
-    if (n.includes('anglais') || n.includes('english')) return '🇬🇧';
-    if (n.includes('gestion') || n.includes('droit') || n.includes('management') || n.includes('marketing')) return '🤝';
-    if (n.includes('reseau') || n.includes('système') || n.includes('linux')) return '🐧';
-    if (n.includes('math') || n.includes('algebre')) return '📐';
-    if (n.includes('communication')) return '📢';
+    // --- 2. LANGAGES DE PROGRAMMATION ---
+    if (n.includes('java') || n.includes('spring') || n.includes('jee')) return '☕';
+    if (n.includes('web') || n.includes('html') || n.includes('css') || n.includes('js') || n.includes('react') || n.includes('angular') || n.includes('vue') || n.includes('node') || n.includes('typescript')) return '🌐';
+    if (n.includes('php') || n.includes('symfony') || n.includes('laravel')) return '🐘';
+    if (n.includes('python') || n.includes('django') || n.includes('flask')) return '🐍';
+    if (n.includes('c#') || n.includes('.net') || n.includes('dotnet')) return '🔷';
+    if (n.includes('cpp') || n.includes('c++') || n.includes(' c ') || n.includes('langage c')) return '🇨';
+    if (n.includes('swift') || n.includes('ios') || n.includes('apple') || n.includes('xcode')) return '🍎';
+    if (n.includes('android') || n.includes('kotlin') || n.includes('mobile') || n.includes('flutter')) return '📱';
+    if (n.includes('go') || n.includes('golang') || n.includes('rust')) return '🦀';
+
+    // --- 3. INFRASTRUCTURE & DATA ---
+    if (n.includes('data') || n.includes('sql') || n.includes('base de données') || n.includes('mongo') || n.includes('postgre') || n.includes('oracle')) return '💾';
+    if (n.includes('cloud') || n.includes('aws') || n.includes('azure') || n.includes('docker') || n.includes('kubernetes') || n.includes('devops') || n.includes('ci/cd')) return '☁️';
+    if (n.includes('linux') || n.includes('unix') || n.includes('bash') || n.includes('shell') || n.includes('système')) return '🐧';
+    if (n.includes('reseau') || n.includes('cisco') || n.includes('network')) return '🔌';
+    if (n.includes('sécurité') || n.includes('security') || n.includes('cyber') || n.includes('pentest') || n.includes('hacking')) return '🛡️';
+
+    // --- 4. MÉTIERS & SOFT SKILLS ---
+    if (n.includes('gestion') || n.includes('management') || n.includes('chef de projet') || n.includes('agile') || n.includes('scrum')) return '🤝';
+    if (n.includes('droit') || n.includes('juridique') || n.includes('rgpd') || n.includes('law')) return '⚖️';
+    if (n.includes('anglais') || n.includes('english') || n.includes('toeic')) return '🇬🇧';
+    if (n.includes('communication') || n.includes('expression') || n.includes('rh') || n.includes('cv')) return '📢';
+    if (n.includes('math') || n.includes('algebre') || n.includes('probabilité') || n.includes('statistique')) return '📐';
+
+    // --- 5. CRÉATION & IA ---
+    if (n.includes('design') || n.includes('ux') || n.includes('ui') || n.includes('photoshop') || n.includes('illustrator') || n.includes('ergonomie')) return '🎨';
+    if (n.includes('jeu') || n.includes('game') || n.includes('unity') || n.includes('unreal')) return '🎮';
+    if (n.includes('ia ') || n.includes('intelligence') || n.includes('machine learning') || n.includes('deep learning')) return '🧠';
+    if (n.includes('architecture') || n.includes('conception') || n.includes('uml') || n.includes('merise')) return '🏗️';
+
+    // --- 6. DIVERS ---
+    if (n.includes('projet') || n.includes('workshop') || n.includes('hackathon')) return '🚀';
+    if (n.includes('conférence') || n.includes('seminaire') || n.includes('masterclass')) return '🎤';
     
     return '📘'; // Défaut
 }
