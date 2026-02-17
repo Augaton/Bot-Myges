@@ -18,6 +18,12 @@ import { connect } from 'http2';
 
 dotenv.config();
 
+interface EncryptedCreds { iv: string; content: string; }
+interface SavedData {
+    users: { [discordId: string]: { user: EncryptedCreds, pass: EncryptedCreds } };
+    knownProjectIds: number[];
+}
+
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
 // CONFIGURATION
@@ -25,7 +31,7 @@ const CURRENT_YEAR = '2025';
 const CHECK_INTERVAL = 60 * 60 * 1000; 
 const ANNOUNCEMENT_CHANNEL_ID = '1420030852154392709'; // ID du channel Discord pour les annonces
 const DB_FILE = './saved_data.json';
-const BOT_VERSION = 'v2.1.2';
+const BOT_VERSION = 'v2.2.0';
 
 const sessions = new Map<string, any>();
 
@@ -163,7 +169,7 @@ client.once(Events.ClientReady, async () => {
     client.user?.setPresence({
         status: 'online',
         activities: [{ 
-            name: `MyGes ${BOT_VERSION}`, 
+            name: `MyGes Bot ${BOT_VERSION}`, 
             type: ActivityType.Playing 
         }]
     });
@@ -253,7 +259,7 @@ client.on('interactionCreate', async interaction => {
 
         if (commandName === 'profil') {
             const token = sessions.get(interaction.user.id);
-            if (!token) return interaction.reply({ content: "❌ Pas connecté.", flags: MessageFlags.Ephemeral });
+            if (!token) return interaction.reply({ content: "❌ Connecte-toi d'abord. (/login)", flags: MessageFlags.Ephemeral });
             await interaction.deferReply({ flags: MessageFlags.Ephemeral });
             try {
                 const p = await ProfileService.getProfile(token);
@@ -322,138 +328,197 @@ client.on('interactionCreate', async interaction => {
         }
 
         if (commandName === 'agenda') {
-            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-            const token = sessions.get(interaction.user.id);
-            if (!token) return interaction.editReply("❌ Connecte-toi d'abord. (/login)");
-
-            // Fonction pour formater l'heure HH:MM (Paris)
-            const formatTime = (dateStr: number | string) => {
-                return new Date(dateStr).toLocaleTimeString('fr-FR', {
-                    hour: '2-digit', 
-                    minute: '2-digit',
-                    timeZone: 'Europe/Paris'
-                });
-            };
-
-            const generateAgenda = async (offset: number) => {
-                const today = new Date();
-                const start = new Date(today);
-                const dayOfWeek = start.getDay(); // 0 (Dim) - 6 (Sam)
-                const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek; // Si Dimanche, on recule de 6 jours, sinon on va à Lundi
+                await interaction.deferReply({ flags: MessageFlags.Ephemeral });
                 
-                start.setDate(start.getDate() + diffToMonday + (offset * 7));
-                start.setHours(0, 0, 0, 0);
+                // --- UTILITAIRES ---
+                const formatTime = (d: any) => new Date(d).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Paris' });
+                const formatDate = (d: Date) => d.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Europe/Paris' });
+                const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-                const end = new Date(start);
-                end.setDate(end.getDate() + 6);
-                end.setHours(23, 59, 59);
+                // Fonction robuste pour trouver le Lundi
+                const getMonday = (d: Date) => {
+                    const date = new Date(d);
+                    const day = date.getDay(); // 0=Dim, 1=Lun
+                    const diff = date.getDate() - day + (day === 0 ? -6 : 1);
+                    date.setDate(diff);
+                    return date;
+                };
 
-                try {
-                    const cours = await TimetableService.getTimetable(token, start, end);
-                    
-                    // Tri chronologique
-                    cours.sort((a: any, b: any) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime());
+                // --- GÉNÉRATION ---
+                const generateAgenda = async (mode: 'day' | 'week', refDate: Date) => {
+                    // On récupère le token à chaque appel
+                    const currentToken = sessions.get(interaction.user.id);
+                    if (!currentToken) return new EmbedBuilder().setTitle("Erreur").setDescription("Session expirée. Fais /login").setColor(0xFF0000);
 
-                    const embed = new EmbedBuilder()
-                        .setTitle(`📅 Emploi du temps`)
-                        .setDescription(`Semaine du **${start.toLocaleDateString('fr-FR')}** au **${end.toLocaleDateString('fr-FR')}**`)
-                        .setColor(0x2B2D31)
-                        .setTimestamp();
+                    let start = new Date(refDate);
+                    let end = new Date(refDate);
+                    let title = "";
 
-                    if (!cours.length) {
-                        embed.setDescription("🏖️ **Aucun cours cette semaine !** Profites-en.");
-                        embed.setImage("https://media.giphy.com/media/l0HlHFRbmaZtBRhXG/giphy.gif"); // Optionnel : petit GIF vacances
+                    if (mode === 'day') {
+                        start.setHours(0, 0, 0, 0);
+                        end.setHours(23, 59, 59);
+                        title = `📅 Agenda du ${capitalize(formatDate(start))}`;
                     } else {
-                        // Regroupement par Jour
-                        const days: { [key: string]: any[] } = {};
+                        start = getMonday(refDate);
+                        start.setHours(0, 0, 0, 0);
                         
-                        cours.forEach((c: any) => {
-                            const dateObj = new Date(c.start_date);
-                            // Format: "Lundi 10 Février"
-                            const dayKey = dateObj.toLocaleDateString('fr-FR', { 
-                                weekday: 'long', 
-                                day: 'numeric', 
-                                month: 'long',
-                                timeZone: 'Europe/Paris'
-                            });
-                            // Capitalisation (lundi -> Lundi)
-                            const dayCap = dayKey.charAt(0).toUpperCase() + dayKey.slice(1);
-                            
-                            if (!days[dayCap]) days[dayCap] = [];
-                            days[dayCap].push(c);
-                        });
-
-                        // Construction des champs
-                        for (const [dayName, dayCourses] of Object.entries(days)) {
-                            let dayContent = "";
-
-                            // Fusion visuelle des cours qui se suivent (optionnel, ici on liste tout proprement)
-                            (dayCourses as any[]).forEach((c) => {
-                                // Heures
-                                const sStr = formatTime(c.start_date);
-                                const eStr = formatTime(c.end_date);
-
-                                // Nom du cours nettoyé (Enlever T1/T2...)
-                                let courseName = c.name.replace(/^(T\d+\s-\s)/i, '').trim();
-                                
-                                // Lieu / Modalité
-                                let location = "Salle inconnue";
-                                let icon = "🏫"; // Par défaut
-
-                                if (c.modality === 'Distanciel') {
-                                    location = "Distanciel";
-                                    icon = "🏠";
-                                } else if (c.rooms && c.rooms.length > 0) {
-                                    location = c.rooms[0].name;
-                                }
-
-                                // Professeur
-                                const prof = c.teacher ? ` • 👨‍🏫 ${c.teacher.replace('M. ', '').replace('Mme ', '')}` : "";
-                                dayContent += `\`${sStr} - ${eStr}\` ${icon} **${courseName}**\n└ *${location}${prof}*\n\n`;
-                            });
-
-                            embed.addFields({ name: `📆 ${dayName}`, value: dayContent });
-                        }
+                        end = new Date(start);
+                        end.setDate(end.getDate() + 6);
+                        end.setHours(23, 59, 59);
+                        
+                        title = `🗓️ Semaine du ${start.toLocaleDateString('fr-FR')} au ${end.toLocaleDateString('fr-FR')}`;
                     }
-                    return embed;
-                } catch (e) {
-                    console.error(e);
-                    return new EmbedBuilder().setTitle("Erreur").setDescription("Impossible de récupérer l'agenda.").setColor(0xFF0000);
-                }
-            };
 
-            let off = 0;
-            
-            // Boutons de navigation
-            const getBtns = (o: number) => new ActionRowBuilder<ButtonBuilder>().addComponents(
-                new ButtonBuilder().setCustomId('prev_week').setLabel('⬅️ Semaine préc.').setStyle(ButtonStyle.Secondary),
-                new ButtonBuilder().setCustomId('today_week').setLabel('Aujourd\'hui').setStyle(ButtonStyle.Primary).setDisabled(o === 0),
-                new ButtonBuilder().setCustomId('next_week').setLabel('Semaine suiv. ➡️').setStyle(ButtonStyle.Secondary)
-            );
+                    console.log(`[Agenda] Mode: ${mode} | Start: ${start.toLocaleString()} | End: ${end.toLocaleString()}`);
 
-            const msg = await interaction.editReply({ 
-                embeds: [await generateAgenda(off)], 
-                components: [getBtns(off)] 
-            });
+                    try {
+                        const cours = await TimetableService.getTimetable(currentToken, start, end);
+                        
+                        if (!cours) throw new Error("API renvoie vide");
 
-            const col = msg.createMessageComponentCollector({ componentType: ComponentType.Button, time: 60000 });
+                        cours.sort((a: any, b: any) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime());
 
-            col.on('collect', async i => {
-                if (i.user.id !== interaction.user.id) return i.reply({ content: 'Pas ton agenda !', flags: MessageFlags.Ephemeral });
-                
-                await i.deferUpdate(); // Important pour ne pas bloquer le bouton
+                        const embed = new EmbedBuilder().setTitle(title).setColor(mode === 'day' ? 0x3498DB : 0x2B2D31);
 
-                if (i.customId === 'prev_week') off--;
-                else if (i.customId === 'next_week') off++;
-                else if (i.customId === 'today_week') off = 0;
+                        if (cours.length === 0) {
+                            embed.setDescription("🏖️ **Aucun cours sur cette période !**");
+                            // Pas de setFooter ici, donc pas d'erreur
+                        } else {
+                            if (mode === 'day') {
+                                let content = "";
+                                cours.forEach((c: any) => {
+                                    const sStr = formatTime(c.start_date);
+                                    const eStr = formatTime(c.end_date);
+                                    const name = c.name.replace(/^(T\d+\s-\s)/i, '').trim();
+                                    const loc = c.rooms?.[0]?.name || (c.modality === 'Distanciel' ? 'Distanciel' : '?');
+                                    const icon = loc === 'Distanciel' ? '🏠' : '🏫';
+                                    const prof = c.teacher ? ` • *${c.teacher.replace('M. ', '').replace('Mme ', '')}*` : "";
+                                    content += `\`${sStr} - ${eStr}\` ${icon} **${name}**\n└ 📍 ${loc}${prof}\n\n`;
+                                });
+                                embed.setDescription(content);
+                            } else {
+                                const days: { [key: string]: any[] } = {};
+                                cours.forEach((c: any) => {
+                                    const dKey = capitalize(formatDate(new Date(c.start_date)));
+                                    if (!days[dKey]) days[dKey] = [];
+                                    days[dKey].push(c);
+                                });
 
-                await interaction.editReply({ 
-                    embeds: [await generateAgenda(off)], 
-                    components: [getBtns(off)] 
+                                for (const [dayName, dayCourses] of Object.entries(days)) {
+                                    let content = "";
+                                    (dayCourses as any[]).forEach((c) => {
+                                        const sStr = formatTime(c.start_date);
+                                        const name = c.name.replace(/^(T\d+\s-\s)/i, '').trim().substring(0, 25);
+                                        const loc = c.rooms?.[0]?.name || (c.modality === 'Distanciel' ? 'Dist.' : '?');
+                                        content += `\`${sStr}\` **${name}** (${loc})\n`;
+                                    });
+                                    embed.addFields({ name: dayName, value: content });
+                                }
+                            }
+                            // ✅ CORRECTIF : On met le footer UNIQUEMENT s'il y a des cours
+                            embed.setFooter({ text: `${cours.length} cours trouvés` });
+                        }
+                        
+                        return embed;
+                    } catch (e) {
+                        console.error("[Agenda Error]", e);
+                        return new EmbedBuilder().setTitle("Erreur").setDescription("Impossible de récupérer l'agenda.").setColor(0xFF0000);
+                    }
+                };
+
+                // --- ETAT INITIAL ---
+                let currentMode: 'day' | 'week' = 'week'; 
+                let currentDate = new Date(); 
+
+                const getRow = (m: 'day' | 'week') => {
+                    const isToday = new Date().toDateString() === currentDate.toDateString();
+                    const labelSwitch = m === 'day' ? '📅 Voir Semaine' : '📆 Voir Jour';
+
+                    return new ActionRowBuilder<ButtonBuilder>().addComponents(
+                        new ButtonBuilder().setCustomId('prev').setLabel('⬅️').setStyle(ButtonStyle.Secondary),
+                        new ButtonBuilder().setCustomId('today').setLabel("Aujourd'hui").setStyle(ButtonStyle.Primary).setDisabled(isToday),
+                        new ButtonBuilder().setCustomId('next').setLabel('➡️').setStyle(ButtonStyle.Secondary),
+                        new ButtonBuilder().setCustomId('switch').setLabel(labelSwitch).setStyle(ButtonStyle.Success),
+                        new ButtonBuilder().setCustomId('jump').setLabel('🔍 Aller à...').setStyle(ButtonStyle.Secondary)
+                    );
+                };
+
+                const msg = await interaction.editReply({ 
+                    embeds: [await generateAgenda(currentMode, currentDate)], 
+                    components: [getRow(currentMode)] 
                 });
-            });
-        }
 
+                const col = msg.createMessageComponentCollector({ componentType: ComponentType.Button, time: 300000 });
+
+                col.on('collect', async i => {
+                    if (i.user.id !== interaction.user.id) return i.reply({ content: "Pas touche !", flags: MessageFlags.Ephemeral });
+
+                    // MODAL JUMP
+                    if (i.customId === 'jump') {
+                        const modal = new ModalBuilder().setCustomId('jump_modal').setTitle('Aller à une date');
+                        const dateInput = new TextInputBuilder()
+                            .setCustomId('date_input')
+                            .setLabel("Date (JJ/MM)")
+                            .setPlaceholder("Ex: 12/03")
+                            .setStyle(TextInputStyle.Short)
+                            .setMaxLength(5)
+                            .setRequired(true);
+                        modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(dateInput));
+                        await i.showModal(modal);
+
+                        try {
+                            const submit = await i.awaitModalSubmit({ time: 60000, filter: (s) => s.user.id === i.user.id });
+                            const val = submit.fields.getTextInputValue('date_input');
+                            const [day, month] = val.split('/').map(Number);
+                            if (!day || !month || day > 31 || month > 12) {
+                                await submit.reply({ content: "❌ Date invalide.", flags: MessageFlags.Ephemeral });
+                                return;
+                            }
+                            const newDate = new Date();
+                            newDate.setMonth(month - 1); 
+                            newDate.setDate(day);
+                            currentDate = newDate;
+
+                            await submit.deferUpdate();
+                            await interaction.editReply({ 
+                                embeds: [await generateAgenda(currentMode, currentDate)], 
+                                components: [getRow(currentMode)] 
+                            });
+                        } catch (e) { }
+                        return;
+                    }
+
+                    // NAVIGATION
+                    await i.deferUpdate();
+
+                    // On crée une NOUVELLE date pour éviter les mutations bizarres
+                    const newDate = new Date(currentDate);
+
+                    if (i.customId === 'prev') {
+                        const daysToRemove = currentMode === 'day' ? 1 : 7;
+                        newDate.setDate(newDate.getDate() - daysToRemove);
+                    } 
+                    else if (i.customId === 'next') {
+                        const daysToAdd = currentMode === 'day' ? 1 : 7;
+                        newDate.setDate(newDate.getDate() + daysToAdd);
+                    } 
+                    else if (i.customId === 'today') {
+                        newDate.setTime(new Date().getTime()); // Reset total
+                    } 
+                    else if (i.customId === 'switch') {
+                        currentMode = currentMode === 'day' ? 'week' : 'day';
+                    }
+
+                    currentDate = newDate; // Mise à jour officielle
+
+                    await interaction.editReply({ 
+                        embeds: [await generateAgenda(currentMode, currentDate)], 
+                        components: [getRow(currentMode)] 
+                    });
+                });
+            }
+
+    
         if (commandName === 'notes') {
             await interaction.deferReply({ flags: MessageFlags.Ephemeral });
             const token = sessions.get(interaction.user.id);
