@@ -1151,7 +1151,7 @@ client.on('interactionCreate', async interaction => {
                 .setThumbnail(client.user?.displayAvatarURL() || null)
                 .addFields(
                     { 
-                        name: "📅 Agenda V3 \"Ultimate\"", 
+                        name: "📅 Agenda V3", 
                         value: "• **Navigation Fluide** : Passez de la vue `Jour` à `Semaine` en un clic.\n• **Saut dans le temps** : Utilisez le bouton `🔍 Aller à...` pour voir l'agenda d'une date précise.\n• **Design Épuré** : La vue semaine est maintenant compacte et lisible." 
                     },
                     { 
