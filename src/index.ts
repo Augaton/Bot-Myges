@@ -31,7 +31,7 @@ const CURRENT_YEAR = '2025';
 const CHECK_INTERVAL = 60 * 60 * 1000; 
 const ANNOUNCEMENT_CHANNEL_ID = '1420030852154392709'; // ID du channel Discord pour les annonces
 const DB_FILE = './saved_data.json';
-const BOT_VERSION = 'v2.2.0';
+const BOT_VERSION = 'v2.2.3';
 
 const sessions = new Map<string, any>();
 
@@ -98,6 +98,29 @@ async function autoLoginUsers() {
         } catch (e) { console.error(`❌ Echec reconnexion ${userId}`); }
         await new Promise(r => setTimeout(r, 2000));
     }
+}
+
+// --- UTILITAIRE : Icone selon la matière ---
+function getCourseIcon(name: string, modality: string): string {
+    const n = name.toLowerCase();
+    
+    // Priorité au distanciel
+    if (modality === 'Distanciel' || n.includes('distanciel')) return '🏠';
+    if (n.includes('examen') || n.includes('partiel') || n.includes('soutenance')) return '🔴';
+
+    // Détection par mot-clé
+    if (n.includes('java') || n.includes('spring')) return '☕';
+    if (n.includes('web') || n.includes('html') || n.includes('css') || n.includes('react') || n.includes('js')) return '🌐';
+    if (n.includes('c#') || n.includes('.net') || n.includes('cpp') || n.includes('c++')) return '🔷';
+    if (n.includes('python') || n.includes('data') || n.includes('ia ') || n.includes('intelligence')) return '🐍';
+    if (n.includes('projet') || n.includes('workshop')) return '🚀';
+    if (n.includes('anglais') || n.includes('english')) return '🇬🇧';
+    if (n.includes('gestion') || n.includes('droit') || n.includes('management') || n.includes('marketing')) return '🤝';
+    if (n.includes('reseau') || n.includes('système') || n.includes('linux')) return '🐧';
+    if (n.includes('math') || n.includes('algebre')) return '📐';
+    if (n.includes('communication')) return '📢';
+    
+    return '📘'; // Défaut
 }
 
 // --- ALERTE PROJETS ---
@@ -189,6 +212,23 @@ client.once(Events.ClientReady, async () => {
     setInterval(checkNewProjects, CHECK_INTERVAL);
 });
 
+// --- UTILITAIRE : Formater le nom du campus (ex: NATION1 -> Nation 1) ---
+function formatCampus(rawCampus: string): string {
+    if (!rawCampus) return "";
+    
+    // On met tout en minuscule sauf la 1ère lettre
+    let s = rawCampus.toLowerCase(); // nation1
+    s = s.charAt(0).toUpperCase() + s.slice(1); // Nation1
+
+    // Petits ajustements pour faire propre
+    s = s.replace("Nation1", "Nation 1")
+         .replace("Nation2", "Nation 2")
+         .replace("Voltaire1", "Voltaire 1")
+         .replace("Voltaire2", "Voltaire 2");
+         
+    return s;
+}
+
 // --- INTERACTIONS ---
 client.on('interactionCreate', async interaction => {
     if (interaction.isChatInputCommand()) {
@@ -268,49 +308,47 @@ client.on('interactionCreate', async interaction => {
             } catch (e) { await interaction.editReply("❌ Erreur."); }
         }
 
-        // --- PROCHAIN COURS ---
         if (commandName === 'prochain') {
             await interaction.deferReply({ flags: MessageFlags.Ephemeral });
             const token = sessions.get(interaction.user.id);
             if (!token) return interaction.editReply("❌ Connecte-toi d'abord. (/login)");
 
             try {
-                // On regarde sur 7 jours glissants pour gérer les week-ends
                 const start = new Date();
                 const end = new Date();
                 end.setDate(end.getDate() + 7); 
-
-                // Récupération des cours
                 const cours = await TimetableService.getTimetable(token, start, end);
-                
-                // 1. On ne garde que ceux dans le futur (Start > Maintenant)
                 const now = Date.now();
                 const futurs = cours.filter((c: any) => new Date(c.start_date).getTime() > now);
 
                 if (futurs.length === 0) {
-                    return interaction.editReply("🎉 Aucun cours prévu dans les 7 prochains jours ! Repos.");
+                    return interaction.editReply("🎉 Aucun cours prévu dans les 7 prochains jours !");
                 }
-
-                // 2. On trie pour avoir le plus proche en premier
                 futurs.sort((a: any, b: any) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime());
-
-                // 3. On prend le gagnant
                 const c = futurs[0];
                 const dateDebut = new Date(c.start_date);
                 const dateFin = new Date(c.end_date);
-                
-                // Nettoyage des données
                 const nomCours = c.name.replace(/^T\d+\s-\s/i, '');
-                const salle = c.rooms?.[0]?.name || 'Non défini';
-                const isDistanciel = salle.toLowerCase().includes('distanciel') || salle.toLowerCase().includes('teams');
-                const icon = isDistanciel ? '🏠' : '🏫';
                 
-                // Timestamp Discord (pour l'affichage "dans X minutes")
+                let salle = 'Non défini';
+                let campusInfo = "";
+                let icon = '🏫';
+
+                if (c.modality === 'Distanciel' || (c.rooms && c.rooms.some((r:any) => r.name.toLowerCase().includes('distanciel')))) {
+                    salle = 'Distanciel';
+                    icon = '🏠';
+                } 
+                else if (c.rooms && c.rooms.length > 0) {
+                    salle = c.rooms.map((r: any) => r.name).join(', ');
+                    const rawCampus = c.rooms[0].campus; 
+                    if (rawCampus) campusInfo = ` (${formatCampus(rawCampus)})`;
+                }
+
                 const timestamp = Math.floor(dateDebut.getTime() / 1000);
 
                 const embed = new EmbedBuilder()
                     .setTitle("🏃 Prochain Cours")
-                    .setColor(0x2ECC71) // Vert émeraude
+                    .setColor(0x2ECC71)
                     .setDescription(`**${nomCours}**`)
                     .addFields(
                         { name: '📍 Salle', value: `${icon} **${salle}**`, inline: true },
@@ -327,196 +365,184 @@ client.on('interactionCreate', async interaction => {
             }
         }
 
+        // --- AGENDA ---
         if (commandName === 'agenda') {
-                await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-                
-                // --- UTILITAIRES ---
-                const formatTime = (d: any) => new Date(d).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Paris' });
-                const formatDate = (d: Date) => d.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Europe/Paris' });
-                const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+            
+            const formatTime = (d: any) => new Date(d).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Paris' });
+            const formatDate = (d: Date) => d.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Europe/Paris' });
+            const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-                // Fonction robuste pour trouver le Lundi
-                const getMonday = (d: Date) => {
-                    const date = new Date(d);
-                    const day = date.getDay(); // 0=Dim, 1=Lun
-                    const diff = date.getDate() - day + (day === 0 ? -6 : 1);
-                    date.setDate(diff);
-                    return date;
-                };
+            const getMonday = (d: Date) => {
+                const date = new Date(d);
+                const day = date.getDay(); 
+                const diff = date.getDate() - day + (day === 0 ? -6 : 1);
+                date.setDate(diff);
+                return date;
+            };
 
-                // --- GÉNÉRATION ---
-                const generateAgenda = async (mode: 'day' | 'week', refDate: Date) => {
-                    // On récupère le token à chaque appel
-                    const currentToken = sessions.get(interaction.user.id);
-                    if (!currentToken) return new EmbedBuilder().setTitle("Erreur").setDescription("Session expirée. Fais /login").setColor(0xFF0000);
+            const generateAgenda = async (mode: 'day' | 'week', refDate: Date): Promise<EmbedBuilder> => {
+                const currentToken = sessions.get(interaction.user.id);
+                if (!currentToken) return new EmbedBuilder().setTitle("Erreur").setDescription("Session expirée. Fais /login").setColor(0xFF0000);
 
-                    let start = new Date(refDate);
-                    let end = new Date(refDate);
-                    let title = "";
+                let start = new Date(refDate);
+                let end = new Date(refDate);
+                let title = "";
 
-                    if (mode === 'day') {
-                        start.setHours(0, 0, 0, 0);
-                        end.setHours(23, 59, 59);
-                        title = `📅 Agenda du ${capitalize(formatDate(start))}`;
+                if (mode === 'day') {
+                    start.setHours(0, 0, 0, 0);
+                    end.setHours(23, 59, 59);
+                    title = `📅 Agenda du ${capitalize(formatDate(start))}`;
+                } else {
+                    start = getMonday(refDate);
+                    start.setHours(0, 0, 0, 0);
+                    end = new Date(start);
+                    end.setDate(end.getDate() + 6);
+                    end.setHours(23, 59, 59);
+                    title = `🗓️ Semaine du ${start.toLocaleDateString('fr-FR')} au ${end.toLocaleDateString('fr-FR')}`;
+                }
+
+                try {
+                    const cours = await TimetableService.getTimetable(currentToken, start, end);
+                    if (!cours) throw new Error("API renvoie vide");
+
+                    cours.sort((a: any, b: any) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime());
+
+                    const embed = new EmbedBuilder().setTitle(title).setColor(mode === 'day' ? 0x3498DB : 0x2B2D31);
+
+                    if (cours.length === 0) {
+                        embed.setDescription("🏖️ **Aucun cours sur cette période !**");
                     } else {
-                        start = getMonday(refDate);
-                        start.setHours(0, 0, 0, 0);
-                        
-                        end = new Date(start);
-                        end.setDate(end.getDate() + 6);
-                        end.setHours(23, 59, 59);
-                        
-                        title = `🗓️ Semaine du ${start.toLocaleDateString('fr-FR')} au ${end.toLocaleDateString('fr-FR')}`;
-                    }
+                        if (mode === 'day') {
+                            let content = "";
+                            cours.forEach((c: any) => {
+                                const sStr = formatTime(c.start_date);
+                                const eStr = formatTime(c.end_date);
+                                const name = c.name.replace(/^(T\d+\s-\s)/i, '').trim();
+                                let loc = "S. Inconnue";
+                                let icon = "🏫";
+                                let campusStr = "";
 
-                    console.log(`[Agenda] Mode: ${mode} | Start: ${start.toLocaleString()} | End: ${end.toLocaleString()}`);
-
-                    try {
-                        const cours = await TimetableService.getTimetable(currentToken, start, end);
-                        
-                        if (!cours) throw new Error("API renvoie vide");
-
-                        cours.sort((a: any, b: any) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime());
-
-                        const embed = new EmbedBuilder().setTitle(title).setColor(mode === 'day' ? 0x3498DB : 0x2B2D31);
-
-                        if (cours.length === 0) {
-                            embed.setDescription("🏖️ **Aucun cours sur cette période !**");
-                            // Pas de setFooter ici, donc pas d'erreur
+                                if (c.modality === 'Distanciel') {
+                                    loc = "Distanciel";
+                                    icon = "🏠";
+                                } else if (c.rooms && c.rooms.length > 0) {
+                                    loc = c.rooms.map((r: any) => r.name).join(', ');
+                                    const rawCampus = c.rooms[0].campus;
+                                    if (rawCampus) campusStr = ` - ${formatCampus(rawCampus)}`;
+                                }
+                                const prof = c.teacher ? ` • *${c.teacher.replace('M. ', '').replace('Mme ', '')}*` : "";
+                                content += `\`${sStr} - ${eStr}\` ${icon} **${name}**\n└ 📍 ${loc}**${campusStr}**${prof}\n\n`;
+                            });
+                            embed.setDescription(content);
                         } else {
-                            if (mode === 'day') {
-                                let content = "";
-                                cours.forEach((c: any) => {
+                            const days: { [key: string]: any[] } = {};
+                            cours.forEach((c: any) => {
+                                const dKey = capitalize(formatDate(new Date(c.start_date)));
+                                if (!days[dKey]) days[dKey] = [];
+                                days[dKey].push(c);
+                            });
+
+                            for (const [dayName, dayCourses] of Object.entries(days)) {
+                                const content = (dayCourses as any[]).map((c) => {
                                     const sStr = formatTime(c.start_date);
                                     const eStr = formatTime(c.end_date);
-                                    const name = c.name.replace(/^(T\d+\s-\s)/i, '').trim();
-                                    const loc = c.rooms?.[0]?.name || (c.modality === 'Distanciel' ? 'Distanciel' : '?');
-                                    const icon = loc === 'Distanciel' ? '🏠' : '🏫';
-                                    const prof = c.teacher ? ` • *${c.teacher.replace('M. ', '').replace('Mme ', '')}*` : "";
-                                    content += `\`${sStr} - ${eStr}\` ${icon} **${name}**\n└ 📍 ${loc}${prof}\n\n`;
-                                });
-                                embed.setDescription(content);
-                            } else {
-                                const days: { [key: string]: any[] } = {};
-                                cours.forEach((c: any) => {
-                                    const dKey = capitalize(formatDate(new Date(c.start_date)));
-                                    if (!days[dKey]) days[dKey] = [];
-                                    days[dKey].push(c);
-                                });
-
-                                for (const [dayName, dayCourses] of Object.entries(days)) {
-                                    let content = "";
-                                    (dayCourses as any[]).forEach((c) => {
-                                        const sStr = formatTime(c.start_date);
-                                        const name = c.name.replace(/^(T\d+\s-\s)/i, '').trim().substring(0, 25);
-                                        const loc = c.rooms?.[0]?.name || (c.modality === 'Distanciel' ? 'Dist.' : '?');
-                                        content += `\`${sStr}\` **${name}** (${loc})\n`;
-                                    });
-                                    embed.addFields({ name: dayName, value: content });
-                                }
+                                    let name = c.name.replace(/^(T\d+\s-\s)/i, '').trim();
+                                    if (name.length > 30) name = name.substring(0, 28) + "…";
+                                    const emoji = getCourseIcon(c.name, c.modality);
+                                    let loc = "S. Inconnue";
+                                    let campusStr = "";
+                                    if (c.modality === 'Distanciel') {
+                                        loc = "Distanciel";
+                                    } else if (c.rooms && c.rooms.length > 0) {
+                                        loc = c.rooms.map((r: any) => r.name).join(', ');
+                                        if (c.rooms[0].campus) campusStr = ` (${formatCampus(c.rooms[0].campus)})`;
+                                    }
+                                    return `**${name}** ${emoji} • \`${sStr} - ${eStr}\`\n└ 📍 ${loc}${campusStr}`;
+                                }).join('\n\n');
+                                embed.addFields({ name: `📅 ${dayName}`, value: content });
                             }
-                            // ✅ CORRECTIF : On met le footer UNIQUEMENT s'il y a des cours
-                            embed.setFooter({ text: `${cours.length} cours trouvés` });
                         }
-                        
-                        return embed;
-                    } catch (e) {
-                        console.error("[Agenda Error]", e);
-                        return new EmbedBuilder().setTitle("Erreur").setDescription("Impossible de récupérer l'agenda.").setColor(0xFF0000);
+                        embed.setFooter({ text: `${cours.length} cours trouvés` });
                     }
-                };
+                    return embed;
+                } catch (e) {
+                    console.error("[Agenda Error]", e);
+                    return new EmbedBuilder().setTitle("Erreur").setDescription("Impossible de récupérer l'agenda.").setColor(0xFF0000);
+                }
+            };
 
-                // --- ETAT INITIAL ---
-                let currentMode: 'day' | 'week' = 'week'; 
-                let currentDate = new Date(); 
+            let currentMode: 'day' | 'week' = 'week'; 
+            let currentDate = new Date(); 
 
-                const getRow = (m: 'day' | 'week') => {
-                    const isToday = new Date().toDateString() === currentDate.toDateString();
-                    const labelSwitch = m === 'day' ? '📅 Voir Semaine' : '📆 Voir Jour';
+            const getRow = (m: 'day' | 'week') => {
+                const isToday = new Date().toDateString() === currentDate.toDateString();
+                const labelSwitch = m === 'day' ? '📅 Voir Semaine' : '📆 Voir Jour';
+                return new ActionRowBuilder<ButtonBuilder>().addComponents(
+                    new ButtonBuilder().setCustomId('prev').setLabel('⬅️').setStyle(ButtonStyle.Secondary),
+                    new ButtonBuilder().setCustomId('today').setLabel("Aujourd'hui").setStyle(ButtonStyle.Primary).setDisabled(isToday),
+                    new ButtonBuilder().setCustomId('next').setLabel('➡️').setStyle(ButtonStyle.Secondary),
+                    new ButtonBuilder().setCustomId('switch').setLabel(labelSwitch).setStyle(ButtonStyle.Success),
+                    new ButtonBuilder().setCustomId('jump').setLabel('🔍 Aller à...').setStyle(ButtonStyle.Secondary)
+                );
+            };
 
-                    return new ActionRowBuilder<ButtonBuilder>().addComponents(
-                        new ButtonBuilder().setCustomId('prev').setLabel('⬅️').setStyle(ButtonStyle.Secondary),
-                        new ButtonBuilder().setCustomId('today').setLabel("Aujourd'hui").setStyle(ButtonStyle.Primary).setDisabled(isToday),
-                        new ButtonBuilder().setCustomId('next').setLabel('➡️').setStyle(ButtonStyle.Secondary),
-                        new ButtonBuilder().setCustomId('switch').setLabel(labelSwitch).setStyle(ButtonStyle.Success),
-                        new ButtonBuilder().setCustomId('jump').setLabel('🔍 Aller à...').setStyle(ButtonStyle.Secondary)
-                    );
-                };
+            const msg = await interaction.editReply({ 
+                embeds: [await generateAgenda(currentMode, currentDate)], 
+                components: [getRow(currentMode)] 
+            });
 
-                const msg = await interaction.editReply({ 
+            const col = msg.createMessageComponentCollector({ componentType: ComponentType.Button, time: 300000 });
+
+            col.on('collect', async i => {
+                if (i.user.id !== interaction.user.id) return i.reply({ content: "Pas touche !", flags: MessageFlags.Ephemeral });
+
+                if (i.customId === 'jump') {
+                    const modal = new ModalBuilder().setCustomId('jump_modal').setTitle('Aller à une date');
+                    const dateInput = new TextInputBuilder().setCustomId('date_input').setLabel("Date (JJ/MM)").setStyle(TextInputStyle.Short).setMaxLength(5).setRequired(true);
+                    modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(dateInput));
+                    await i.showModal(modal);
+                    try {
+                        const submit = await i.awaitModalSubmit({ time: 60000, filter: (s) => s.user.id === i.user.id });
+                        const val = submit.fields.getTextInputValue('date_input');
+                        const [day, month] = val.split('/').map(Number);
+                        if (!day || !month || day > 31 || month > 12) {
+                            await submit.reply({ content: "❌ Date invalide.", flags: MessageFlags.Ephemeral });
+                            return;
+                        }
+                        const newDate = new Date(); newDate.setMonth(month - 1); newDate.setDate(day);
+                        currentDate = newDate;
+                        await submit.deferUpdate();
+                        await interaction.editReply({ embeds: [await generateAgenda(currentMode, currentDate)], components: [getRow(currentMode)] });
+                    } catch (e) { }
+                    return;
+                }
+
+                await i.deferUpdate();
+                const newDate = new Date(currentDate);
+
+                if (i.customId === 'prev') {
+                    const daysToRemove = currentMode === 'day' ? 1 : 7;
+                    newDate.setDate(newDate.getDate() - daysToRemove);
+                } 
+                else if (i.customId === 'next') {
+                    const daysToAdd = currentMode === 'day' ? 1 : 7;
+                    newDate.setDate(newDate.getDate() + daysToAdd);
+                } 
+                else if (i.customId === 'today') {
+                    newDate.setTime(new Date().getTime()); 
+                } 
+                else if (i.customId === 'switch') {
+                    currentMode = currentMode === 'day' ? 'week' : 'day';
+                }
+
+                currentDate = newDate; 
+                await interaction.editReply({ 
                     embeds: [await generateAgenda(currentMode, currentDate)], 
                     components: [getRow(currentMode)] 
                 });
-
-                const col = msg.createMessageComponentCollector({ componentType: ComponentType.Button, time: 300000 });
-
-                col.on('collect', async i => {
-                    if (i.user.id !== interaction.user.id) return i.reply({ content: "Pas touche !", flags: MessageFlags.Ephemeral });
-
-                    // MODAL JUMP
-                    if (i.customId === 'jump') {
-                        const modal = new ModalBuilder().setCustomId('jump_modal').setTitle('Aller à une date');
-                        const dateInput = new TextInputBuilder()
-                            .setCustomId('date_input')
-                            .setLabel("Date (JJ/MM)")
-                            .setPlaceholder("Ex: 12/03")
-                            .setStyle(TextInputStyle.Short)
-                            .setMaxLength(5)
-                            .setRequired(true);
-                        modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(dateInput));
-                        await i.showModal(modal);
-
-                        try {
-                            const submit = await i.awaitModalSubmit({ time: 60000, filter: (s) => s.user.id === i.user.id });
-                            const val = submit.fields.getTextInputValue('date_input');
-                            const [day, month] = val.split('/').map(Number);
-                            if (!day || !month || day > 31 || month > 12) {
-                                await submit.reply({ content: "❌ Date invalide.", flags: MessageFlags.Ephemeral });
-                                return;
-                            }
-                            const newDate = new Date();
-                            newDate.setMonth(month - 1); 
-                            newDate.setDate(day);
-                            currentDate = newDate;
-
-                            await submit.deferUpdate();
-                            await interaction.editReply({ 
-                                embeds: [await generateAgenda(currentMode, currentDate)], 
-                                components: [getRow(currentMode)] 
-                            });
-                        } catch (e) { }
-                        return;
-                    }
-
-                    // NAVIGATION
-                    await i.deferUpdate();
-
-                    // On crée une NOUVELLE date pour éviter les mutations bizarres
-                    const newDate = new Date(currentDate);
-
-                    if (i.customId === 'prev') {
-                        const daysToRemove = currentMode === 'day' ? 1 : 7;
-                        newDate.setDate(newDate.getDate() - daysToRemove);
-                    } 
-                    else if (i.customId === 'next') {
-                        const daysToAdd = currentMode === 'day' ? 1 : 7;
-                        newDate.setDate(newDate.getDate() + daysToAdd);
-                    } 
-                    else if (i.customId === 'today') {
-                        newDate.setTime(new Date().getTime()); // Reset total
-                    } 
-                    else if (i.customId === 'switch') {
-                        currentMode = currentMode === 'day' ? 'week' : 'day';
-                    }
-
-                    currentDate = newDate; // Mise à jour officielle
-
-                    await interaction.editReply({ 
-                        embeds: [await generateAgenda(currentMode, currentDate)], 
-                        components: [getRow(currentMode)] 
-                    });
-                });
-            }
+            });
+        }
 
     
         if (commandName === 'notes') {

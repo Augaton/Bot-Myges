@@ -13,7 +13,6 @@ export abstract class BaseService {
     request_config: RequestConfig = {},
   ) {
     const { headers = {}, body } = request_config;
-
     const response = await fetch(`https://api.kordis.fr${url}`, {
       method,
       headers: {
