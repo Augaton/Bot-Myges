@@ -1145,33 +1145,29 @@ client.on('interactionCreate', async interaction => {
             await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
             const embed = new EmbedBuilder()
-                .setTitle("📢 Mise à jour v2.1 - \"Secure & Helpful\"")
-                .setDescription("Une mise à jour axée sur la **sécurité** et l'**utilitaire**. Voici les nouveautés :")
-                .setColor(0xFF00FF) // Magenta pour le style "Update"
+                .setTitle(`🚀 Mise à jour ${BOT_VERSION} - "Navigation & Clarté"`)
+                .setDescription("Une mise à jour majeure pour l'organisation et la lisibilité de votre emploi du temps.")
+                .setColor(0x9B59B6) // Violet "Update"
                 .setThumbnail(client.user?.displayAvatarURL() || null)
                 .addFields(
                     { 
-                        name: "🔐 Login Sécurisé (Modale)", 
-                        value: "> **Fini les mots de passe dans le chat !**\n> La commande `/login` ouvre désormais un **formulaire popup** privé et sécurisé. Vos identifiants sont chiffrés." 
+                        name: "📅 Agenda V3 \"Ultimate\"", 
+                        value: "• **Navigation Fluide** : Passez de la vue `Jour` à `Semaine` en un clic.\n• **Saut dans le temps** : Utilisez le bouton `🔍 Aller à...` pour voir l'agenda d'une date précise.\n• **Design Épuré** : La vue semaine est maintenant compacte et lisible." 
                     },
                     { 
-                        name: "🆘 Nouveau Menu d'Aide (/help)", 
-                        value: "> Perdu ? La commande `/help` affiche un **guide complet** et catégorisé de toutes les fonctionnalités du bot." 
+                        name: "📍 Précision des Lieux", 
+                        value: "• **Multi-Salles** : Affiche désormais toutes les salles (ex: `B01, B02`) pour les examens ou TP.\n• **Campus Intelligent** : Le bot détecte automatiquement le campus (Nation, Voltaire, Erard...) via l'API." 
                     },
                     { 
-                        name: "🏓 Diagnostic Réseau (/ping)", 
-                        value: "> MyGes rame ? Vérifiez-le avec `/ping`. Le bot analyse sa latence et **teste l'état de l'API de l'école** en temps réel (🟢 En ligne / 🔴 Hors ligne)." 
-                    },
-                    { 
-                        name: "🏫 Campus V2 (/campus)", 
-                        value: "> Ajout des **adresses postales** précises pour chaque bâtiment (Nation, Erard, Voltaire...).\n> Nouveau design bleu plus lisible." 
+                        name: "🎨 Icônes Dynamiques", 
+                        value: "• Ajout de **+50 émojis** pour reconnaître vos matières en un coup d'œil (☕ Java, ⚙️ Assembleur, ☁️ Cloud, 🛡️ Sécurité...)." 
                     },
                     {
-                        name: "⚙️ Optimisations",
-                        value: "• Correction des avertissements Discord (Deprecation Warnings).\n• Amélioration de la stabilité de la connexion."
+                        name: "🛠️ Correctifs",
+                        value: "• Correction du crash lors des semaines vides.\n• Amélioration de la commande `/prochain`."
                     }
                 )
-                .setFooter({ text: "Merci d'utiliser le bot ! 🚀" })
+                .setFooter({ text: "Merci d'utiliser MyGes Bot ! 🎓" })
                 .setTimestamp();
 
             await interaction.editReply({ embeds: [embed] });
