@@ -31,7 +31,7 @@ const CURRENT_YEAR = '2025';
 const CHECK_INTERVAL = 60 * 60 * 1000; 
 const ANNOUNCEMENT_CHANNEL_ID = '1420030852154392709'; // ID du channel Discord pour les annonces
 const DB_FILE = './saved_data.json';
-const BOT_VERSION = 'v2.2.5';
+const BOT_VERSION = 'v2.2.6';
 
 const sessions = new Map<string, any>();
 
@@ -120,12 +120,13 @@ function getCourseIcon(name: string, modality: string): string {
     if (n.includes('swift') || n.includes('ios') || n.includes('apple') || n.includes('xcode')) return '🍎';
     if (n.includes('android') || n.includes('kotlin') || n.includes('mobile') || n.includes('flutter')) return '📱';
     if (n.includes('go') || n.includes('golang') || n.includes('rust')) return '🦀';
+    if (n.includes('assembleur') || n.includes('assembly') || n.includes(' asm ') || n.includes('microprocesseur')) return '⚙️';
 
     // --- 3. INFRASTRUCTURE & DATA ---
     if (n.includes('data') || n.includes('sql') || n.includes('base de données') || n.includes('mongo') || n.includes('postgre') || n.includes('oracle')) return '💾';
     if (n.includes('cloud') || n.includes('aws') || n.includes('azure') || n.includes('docker') || n.includes('kubernetes') || n.includes('devops') || n.includes('ci/cd')) return '☁️';
     if (n.includes('linux') || n.includes('unix') || n.includes('bash') || n.includes('shell') || n.includes('système')) return '🐧';
-    if (n.includes('reseau') || n.includes('cisco') || n.includes('network')) return '🔌';
+    if (n.includes('reseau') || n.includes('réseau') || n.includes('cisco') || n.includes('network')) return '🔌';
     if (n.includes('sécurité') || n.includes('security') || n.includes('cyber') || n.includes('pentest') || n.includes('hacking')) return '🛡️';
 
     // --- 4. MÉTIERS & SOFT SKILLS ---
