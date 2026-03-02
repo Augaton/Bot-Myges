@@ -15,6 +15,7 @@ import { ProjectService } from './myges/services/project';
 import { SchoolService } from './myges/services/school';
 import { encrypt, decrypt } from './crypto'; 
 import { connect } from 'http2';
+import { ANNOUNCEMENT_CHANNEL_ID, BOT_VERSION, CHECK_INTERVAL, CURRENT_YEAR, DB_FILE } from './config';
 
 dotenv.config();
 
@@ -25,13 +26,6 @@ interface SavedData {
 }
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
-
-// CONFIGURATION
-const CURRENT_YEAR = '2025'; 
-const CHECK_INTERVAL = 60 * 60 * 1000; 
-const ANNOUNCEMENT_CHANNEL_ID = '1420030852154392709'; // ID du channel Discord pour les annonces
-const DB_FILE = './saved_data.json';
-const BOT_VERSION = 'v2.2.6';
 
 const sessions = new Map<string, any>();
 
