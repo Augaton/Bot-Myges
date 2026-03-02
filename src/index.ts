@@ -1082,7 +1082,7 @@ client.on('interactionCreate', async interaction => {
                         value: "` /ping ` : Vérifier l'état du bot et de MyGes\n` /changelog ` : Voir les dernières mises à jour" 
                     }
                 )
-                .setFooter({ text: "Bot développé avec ❤️" });
+                .setFooter({ text: "Bot développé avec ❤️ (Amour si vous avez pas saisi)" });
 
             await interaction.editReply({ embeds: [embed] });
         }
@@ -1203,6 +1203,8 @@ client.on('interactionCreate', async interaction => {
                     content: `✅ **Connexion réussie !**\nBonjour **${username}**, je suis connecté à ton compte MyGes.\nTu peux maintenant utiliser \`/agenda\`, \`/notes\`, etc.` 
                 });
 
+                console.log(`✅ Utilisateur ${username} (${interaction.user.id}) connecté.`);
+
                 // Premier check pour charger les données (projets, etc.)
                 checkNewProjects();
 
@@ -1211,6 +1213,7 @@ client.on('interactionCreate', async interaction => {
                 await interaction.editReply({ 
                     content: "❌ **Échec de la connexion.**\nVérifie tes identifiants.\n*(Si le problème persiste, MyGes est peut-être en maintenance)*" 
                 });
+                console.log(`❌ Échec de connexion pour l'utilisateur ${username} (${interaction.user.id}).`);
             }
         }
     }
