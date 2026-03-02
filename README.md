@@ -18,13 +18,6 @@ Le bot est structuré de manière à séparer la logique de développement de l'
 
 Ce bot est optimisé pour l'egg [stanislasbdx/pterodactyl-egg-discord](https://github.com/stanislasbdx/pterodactyl-egg-discord).
 
-### 1. Configuration de l'Egg
-
-Lors de la création de votre serveur sur Pterodactyl, assurez-vous de configurer les variables suivantes :
-
-* **Install Command** : `npm install`
-* **Start Command** : `node index.js` (ou la commande par défaut de l'egg pointant sur `index.js`).
-
 ### 2. Variables d'environnement
 
 Créez un fichier `.env` à la racine ou renseignez les variables dans l'onglet **Startup** :
@@ -32,9 +25,7 @@ Créez un fichier `.env` à la racine ou renseignez les variables dans l'onglet 
 | Variable | Description |
 | --- | --- |
 | `DISCORD_TOKEN` | Le token de votre application Discord Developer Portal. |
-| `MYGES_USER` | Identifiant MyGES (ex: `jdoe`). |
-| `MYGES_PASSWORD` | Mot de passe MyGES. |
-| `GUILD_ID` | L'ID du serveur Discord de votre classe. |
+| `ENCRYPTION_KEY` | Clé d'encryption pour les logins (32 caractères !). |
 
 ---
 
