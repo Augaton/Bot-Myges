@@ -27,7 +27,7 @@ Créez un fichier `.env` à la racine ou renseignez les variables dans l'onglet 
 | `DISCORD_TOKEN` | Le token de votre application Discord Developer Portal. |
 | `ENCRYPTION_KEY` | Clé d'encryption pour les logins (32 caractères !). |
 
-N'oublier pas également qu'il y a des configurations a faire dans `index.ts` !
+N'oublier pas également qu'il y a des configurations a faire dans `config.ts` !
 
 ---
 
