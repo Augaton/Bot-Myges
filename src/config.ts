@@ -5,5 +5,5 @@ export const DB_FILE = './saved_data.json';
 
 // BOT VERSION
 
-export const BOT_VERSION = 'v2.2.6';
+export const BOT_VERSION = 'v2.2.7';
 
