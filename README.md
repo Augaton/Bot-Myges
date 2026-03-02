@@ -93,16 +93,6 @@ require('./src/bot.ts');
 
 ---
 
-## 🤝 Contribution
-
-1. Forkez le projet.
-2. Créez votre branche d'entité (`git checkout -b feature/AmazingFeature`).
-3. Commit avec un message clair (`git commit -m 'Add some AmazingFeature'`).
-4. Push sur la branche (`git push origin feature/AmazingFeature`).
-5. Ouvrez une Pull Request.
-
----
-
-> **Note :** Ce bot n'est pas affilié à Réseau GES. L'utilisation abusive de l'API MyGES peut entraîner des restrictions de compte.
+> **Note :** Ce bot n'est pas affilié à Réseau GES.
 
 ---
