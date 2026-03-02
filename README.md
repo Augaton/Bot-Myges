@@ -1,5 +1,3 @@
----
-
 # 🎓 MyGES Discord Bot
 
 Un bot Discord performant conçu pour automatiser la gestion de classe et la consultation des données **MyGES** (notes, planning, absences). Ce projet utilise **TypeScript** pour la robustesse, avec un point d'entrée JavaScript pour une compatibilité maximale avec les environnements d'hébergement.
