@@ -11,7 +11,8 @@ export abstract class BaseService {
     method: string,
     url: string,
     request_config: RequestConfig = {},
-  ) {
+    _retried = false,
+  ): Promise<T> {
     const { headers = {}, body } = request_config;
     const response = await fetch(`https://api.kordis.fr${url}`, {
       method,
@@ -24,6 +25,16 @@ export abstract class BaseService {
     });
 
     if (!response.ok) {
+      // Token expiré : on tente une reconnexion automatique (une seule fois)
+      // puis on rejoue la requête avec le nouveau token.
+      if (response.status === 401 && !_retried && credentials.__refresh) {
+        const fresh = await credentials.__refresh();
+        if (fresh) {
+          credentials.token_type = fresh.token_type;
+          credentials.access_token = fresh.access_token;
+          return this.request<T>(credentials, method, url, request_config, true);
+        }
+      }
       throw new Error(`HTTP error! status: ${response.status}`);
     }
 
