@@ -2,6 +2,7 @@ import { ChatInputCommandInteraction, EmbedBuilder, MessageFlags, SlashCommandBu
 import { Command } from '../core/command';
 import { SchoolService } from '../myges/services/school';
 import { sessions } from '../core/store';
+import { snippet } from '../utils/format';
 
 const command: Command = {
     data: new SlashCommandBuilder()
@@ -16,19 +17,31 @@ const command: Command = {
         try {
             const newsData: any = await SchoolService.getNews(token);
             // L'API renvoie souvent une pagination { content: [...] }
-            const newsList = newsData.content || newsData;
+            const newsList: any[] = newsData.content || newsData;
 
             if (!newsList || newsList.length === 0) return interaction.editReply('Aucune actualité.');
 
-            const embed = new EmbedBuilder().setTitle("📰 Actualités de l'école").setColor(0x00aeef);
+            const embed = new EmbedBuilder()
+                .setTitle("📰 Actualités de l'école")
+                .setColor(0x00aeef)
+                .setDescription(`Les **${Math.min(newsList.length, 5)}** dernières actualités`)
+                .setFooter({ text: `${newsList.length} actualité(s) au total` });
 
-            // On prend les 5 dernières
-            newsList.slice(0, 5).forEach((n: any) => {
-                const date = new Date(n.date).toLocaleDateString('fr-FR');
-                let title = n.title || 'Sans titre';
-                if (title.length > 250) title = title.substring(0, 250) + '...';
-                embed.addFields({ name: `📅 ${date} - ${title}`, value: `> ${n.author || 'Administration'}` });
-            });
+            for (const n of newsList.slice(0, 5)) {
+                const title = snippet(n.title || n.subject || 'Sans titre', 100);
+                const body = snippet(n.message || n.content || n.body || n.description || '', 160);
+                const author = n.author || n.populate || 'Administration';
+
+                const parts: string[] = [];
+                if (n.date) {
+                    const ts = Math.floor(new Date(n.date).getTime() / 1000);
+                    if (!isNaN(ts)) parts.push(`🗓️ <t:${ts}:D> · <t:${ts}:R>`);
+                }
+                parts.push(`✍️ *${author}*`);
+                if (body) parts.push(`\n${body}`);
+
+                embed.addFields({ name: `📌 ${title}`, value: parts.join('\n') });
+            }
 
             await interaction.editReply({ embeds: [embed] });
         } catch (e) {
