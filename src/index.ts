@@ -5,6 +5,7 @@ import { commands, commandsJSON } from './core/registry';
 import { handleLoginModal, LOGIN_MODAL_ID } from './commands/login';
 import { autoLoginUsers } from './tasks/autoLogin';
 import { checkNewProjects } from './tasks/projects';
+import { announceUpdateIfNeeded } from './tasks/announceUpdate';
 
 dotenv.config();
 
@@ -33,7 +34,10 @@ client.once(Events.ClientReady, async () => {
         console.error(e);
     }
 
-    // 4. Tâches de fond
+    // 4. Annonce de mise à jour si la version a changé
+    await announceUpdateIfNeeded(client);
+
+    // 5. Tâches de fond
     setInterval(() => checkNewProjects(client), CHECK_INTERVAL);
 });
 
