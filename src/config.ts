@@ -1,4 +1,5 @@
 export const ANNOUNCEMENT_CHANNEL_ID = '1420030852154392709'; // ID du channel Discord pour les annonces
+export const UPDATE_CHANNEL_ID = '1420030852154392709'; // ID du channel Discord où annoncer les mises à jour du bot
 export const CHECK_INTERVAL = 60 * 60 * 1000;
 export const DB_FILE = './saved_data.json';
 
