@@ -8,15 +8,16 @@ import { BOT_VERSION } from '../config';
  */
 export function buildChangelogEmbed(client: Client): EmbedBuilder {
     return new EmbedBuilder()
-        .setTitle(`🚀 Mise à jour ${BOT_VERSION} - "Navigation & Clarté"`)
-        .setDescription("Une mise à jour majeure pour l'organisation et la lisibilité de votre emploi du temps.")
-        .setColor(0x9b59b6)
+        .setTitle(`🚀 Mise à jour ${BOT_VERSION} - "Emploi du temps en image"`)
+        .setDescription("La plus grosse refonte visuelle du bot : votre emploi du temps devient un véritable planning graphique, et l'affichage des projets et actus a été repensé.")
+        .setColor(0x5865f2)
         .setThumbnail(client.user?.displayAvatarURL() || null)
         .addFields(
-            { name: '📅 Agenda V3', value: '• **Navigation Fluide** : Passez de la vue `Jour` à `Semaine` en un clic.\n• **Saut dans le temps** : Utilisez le bouton `🔍 Aller à...` pour voir l\'agenda d\'une date précise.\n• **Design Épuré** : La vue semaine est maintenant compacte et lisible.' },
-            { name: '📍 Précision des Lieux', value: '• **Multi-Salles** : Affiche désormais toutes les salles (ex: `B01, B02`) pour les examens ou TP.\n• **Campus Intelligent** : Le bot détecte automatiquement le campus (Nation, Voltaire, Erard...) via l\'API.' },
-            { name: '🎨 Icônes Dynamiques', value: '• Ajout de **+50 émojis** pour reconnaître vos matières en un coup d\'œil (☕ Java, ⚙️ Assembleur, ☁️ Cloud, 🛡️ Sécurité...).' },
-            { name: '🛠️ Correctifs', value: '• Correction du crash lors des semaines vides.\n• Amélioration de la commande `/prochain`.' }
+            { name: '🗓️ Agenda en image', value: '• `/agenda` affiche désormais un **vrai planning en grille** (vues `Jour` et `Semaine`) au lieu de simple texte.\n• Ligne **« maintenant »** en direct et jour courant surligné.' },
+            { name: '🎨 Couleur par campus', value: '• Chaque cours est **coloré selon son campus** (Nation, Voltaire, Erard, Rauch...) avec une **légende**.\n• Les **examens** sont automatiquement **encadrés en rouge**.' },
+            { name: '🧩 Lisibilité améliorée', value: '• Les cours simultanés sont **séparés automatiquement** (fini les blocs superposés).\n• Le texte **s\'adapte** à la taille du bloc pour rester lisible.' },
+            { name: '📂 Projets & 📰 Actus', value: '• `/projets` : **compte à rebours en direct** sur chaque échéance, affichage aéré et trié par urgence.\n• `/news` : présentation nettoyée, dates dynamiques et extrait de contenu.' },
+            { name: '🔒 Fiabilité (sous le capot)', value: '• **Reconnexion automatique** quand la session MyGes expire.\n• Chiffrement des identifiants renforcé et détection automatique de l\'année scolaire.' }
         )
         .setFooter({ text: "Merci d'utiliser MyGes Bot ! 🎓" })
         .setTimestamp();
