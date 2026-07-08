@@ -3,7 +3,7 @@ import { Command } from '../core/command';
 import { ProjectService } from '../myges/services/project';
 import { getCurrentYear } from '../config';
 import { sessions } from '../core/store';
-import { getNextStep } from '../utils/format';
+import { getNextStep, snippet } from '../utils/format';
 
 const command: Command = {
     data: new SlashCommandBuilder()
@@ -20,35 +20,45 @@ const command: Command = {
             const now = Date.now();
 
             // On ne garde que les projets ayant une étape future
-            const activeProjects: any[] = [];
-            projects.forEach((p: any) => {
+            const active: any[] = [];
+            for (const p of projects) {
                 const nextStep = getNextStep(p);
                 if (nextStep) {
-                    p._nextStep = nextStep; // injecté pour l'affichage / le tri
-                    activeProjects.push(p);
+                    p._nextStep = nextStep;
+                    active.push(p);
                 }
-            });
+            }
 
-            if (activeProjects.length === 0) return interaction.editReply('🎉 Aucun projet en cours !');
+            if (active.length === 0) return interaction.editReply('🎉 Aucun projet en cours !');
 
             // Tri : du plus urgent au moins urgent
-            activeProjects.sort((a, b) => a._nextStep.date - b._nextStep.date);
+            active.sort((a, b) => a._nextStep.date - b._nextStep.date);
 
-            const embed = new EmbedBuilder().setTitle('📂 Projets et Deadlines').setColor(0xffa500);
+            // Couleur de l'embed selon l'urgence du projet le plus proche
+            const firstDays = Math.ceil((active[0]._nextStep.date - now) / 86400000);
+            const headColor = firstDays <= 3 ? 0xe74c3c : firstDays <= 7 ? 0xe67e22 : 0x2ecc71;
 
-            activeProjects.slice(0, 10).forEach((p: any) => {
+            const embed = new EmbedBuilder()
+                .setTitle('📂 Mes projets')
+                .setDescription(`**${active.length}** projet${active.length > 1 ? 's' : ''} en cours · triés par échéance`)
+                .setColor(headColor)
+                .setFooter({ text: 'Les délais se mettent à jour automatiquement' });
+
+            for (const p of active.slice(0, 10)) {
                 const step = p._nextStep;
-                const dateRendu = new Date(step.date).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
-                const desc = p.project_teaching_goals ? p.project_teaching_goals.substring(0, 80) + '...' : 'Pas de description';
+                const ts = Math.floor(step.date / 1000);
+                const diffDays = Math.ceil((step.date - now) / 86400000);
+                const urgent = diffDays <= 3 ? '🔴' : diffDays <= 7 ? '🟠' : '🟢';
 
-                const diffDays = Math.ceil((step.date - now) / (1000 * 60 * 60 * 24));
-                const alertEmoji = diffDays <= 3 ? '🔥' : diffDays <= 7 ? '⚠️' : '⏳';
+                const lines = [
+                    `📚 **${p.course_name}**`,
+                    `🎯 ${step.type} · 🗓️ <t:${ts}:D> (**<t:${ts}:R>**)`,
+                ];
+                const desc = snippet(p.project_teaching_goals);
+                if (desc) lines.push(`> ${desc}`);
 
-                embed.addFields({
-                    name: `${alertEmoji} ${p.name}`,
-                    value: `📚 **${p.course_name}**\n🎯 **Prochaine étape : ${step.type}**\n📅 Pour le ${dateRendu} (dans ${diffDays}j)\n> *${desc}*`,
-                });
-            });
+                embed.addFields({ name: `${urgent} ${p.name}`, value: lines.join('\n') });
+            }
 
             await interaction.editReply({ embeds: [embed] });
         } catch (e) {
