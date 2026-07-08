@@ -8,6 +8,8 @@ import type { EncryptedData } from '../crypto';
 export interface SavedData {
     users: { [discordId: string]: { user: EncryptedData; pass: EncryptedData } };
     knownProjectIds: number[];
+    // Dernière version du bot annoncée dans le salon des MAJ (évite de re-poster).
+    lastAnnouncedVersion?: string;
 }
 
 // Sessions actives (token MyGes en mémoire vive), indexées par ID Discord.
