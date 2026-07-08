@@ -1,5 +1,18 @@
 // Fonctions utilitaires de formatage partagées entre plusieurs commandes.
 
+// Transforme un texte (potentiellement du HTML) en une ligne courte lisible.
+export function snippet(raw: string, max = 120): string {
+    if (!raw) return '';
+    const clean = raw
+        .replace(/<br\s*\/?>/gi, ' ')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&[a-z]+;/gi, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    return clean.length > max ? clean.slice(0, max - 1) + '…' : clean;
+}
+
 export function formatToFrenchTime(date: Date): string {
     return date.toLocaleTimeString('fr-FR', {
         hour: '2-digit',
