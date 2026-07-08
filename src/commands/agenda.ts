@@ -19,7 +19,15 @@ const command: Command = {
         .setDescription('Voir les cours du jour ou de la semaine avec navigation'),
 
     execute: async (interaction: ChatInputCommandInteraction) => {
-        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        // Discord n'accorde que 3 s pour accuser réception. Si l'hôte est lent
+        // (event-loop bloqué, horloge décalée), deferReply peut échouer avec
+        // 10062 « Unknown interaction » : on l'ignore proprement au lieu de crasher.
+        try {
+            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        } catch (e: any) {
+            console.warn(`[Agenda] deferReply impossible (interaction expirée, code ${e?.code}).`);
+            return;
+        }
 
         const getMonday = (d: Date) => {
             const date = new Date(d);
@@ -56,6 +64,10 @@ const command: Command = {
 
             try {
                 const cours = (await TimetableService.getTimetable(currentToken, start, end)) || [];
+                // Le rendu canvas est synchrone et bloque l'event-loop : on cède
+                // la main d'abord pour que les autres interactions en attente
+                // puissent être acquittées (deferReply) avant ce blocage.
+                await new Promise((r) => setImmediate(r));
                 const buffer = mode === 'day' ? renderDayImage(cours, refDate) : renderWeekImage(cours, start);
                 const file = new AttachmentBuilder(buffer, { name: 'agenda.png' });
                 const embed = new EmbedBuilder()
