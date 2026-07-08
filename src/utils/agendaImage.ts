@@ -26,38 +26,44 @@ const COL = {
     bg: '#1e1f22',
     panel: '#2b2d31',
     grid: '#3a3c41',
-    gridStrong: '#4a4d53',
     text: '#ffffff',
     muted: '#b5bac1',
     faint: '#80848e',
     now: '#f23f43',
 };
 
-// Palette catégorielle (accents lisibles sur fond sombre).
-const PALETTE = ['#5865f2', '#3498db', '#2ecc71', '#1abc9c', '#e67e22', '#9b59b6', '#e91e63', '#f1c40f', '#16a085', '#eb459e'];
-const EXAM_COLOR = '#f23f43';
+// --- COULEURS PAR CAMPUS ---
+const CAMPUS_COLORS: Record<string, string> = {
+    'Nation 1': '#3498db',
+    'Nation 2': '#1abc9c',
+    Erard: '#e67e22',
+    'Voltaire 1': '#9b59b6',
+    'Voltaire 2': '#e91e63',
+    Rauch: '#2ecc71',
+    Distanciel: '#8b93a7',
+    Autre: '#747f8d',
+};
+// Palette de secours pour un campus inconnu non listé ci-dessus.
+const FALLBACK = ['#5865f2', '#f1c40f', '#16a085', '#eb459e', '#e74c3c', '#00b8d9'];
+const EXAM_BORDER = '#f23f43';
 
 interface Course {
     name: string;
     start: Date;
     end: Date;
     rooms: string;
-    campus: string;
+    campusKey: string;
     teacher: string;
     distanciel: boolean;
     exam: boolean;
     color: string;
+    col: number; // sous-colonne (anti-superposition)
+    cols: number; // nombre de sous-colonnes du groupe
 }
 
 // --- Helpers ---
 function cleanName(raw: string): string {
     return (raw || 'Cours').replace(/^T\d+\s-\s/i, '').trim();
-}
-
-function hashColor(name: string): string {
-    let h = 0;
-    for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
-    return PALETTE[h % PALETTE.length];
 }
 
 function hexToRgba(hex: string, a: number): string {
@@ -81,9 +87,23 @@ function sameDay(a: Date, b: Date): boolean {
     return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
 
+// Normalise le libellé de campus renvoyé par l'API en une clé stable.
+function campusKey(raw: string, distanciel: boolean): string {
+    if (distanciel) return 'Distanciel';
+    if (!raw) return 'Autre';
+    const s = raw.toLowerCase().replace(/[\s_-]/g, '');
+    if (s.includes('nation1')) return 'Nation 1';
+    if (s.includes('nation2')) return 'Nation 2';
+    if (s.includes('voltaire1')) return 'Voltaire 1';
+    if (s.includes('voltaire2')) return 'Voltaire 2';
+    if (s.includes('erard')) return 'Erard';
+    if (s.includes('rauch')) return 'Rauch';
+    return raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
+}
+
 // Rectangle arrondi
 function roundRect(ctx: SKRSContext2D, x: number, y: number, w: number, h: number, r: number) {
-    const rad = Math.min(r, w / 2, h / 2);
+    const rad = Math.max(0, Math.min(r, w / 2, h / 2));
     ctx.beginPath();
     ctx.moveTo(x + rad, y);
     ctx.arcTo(x + w, y, x + w, y + h, rad);
@@ -93,27 +113,63 @@ function roundRect(ctx: SKRSContext2D, x: number, y: number, w: number, h: numbe
     ctx.closePath();
 }
 
-// Découpe un texte pour tenir dans une largeur donnée (max `maxLines` lignes).
-function wrapText(ctx: SKRSContext2D, text: string, maxWidth: number, maxLines: number): string[] {
-    const words = text.split(/\s+/);
+// Découpe un texte pour une largeur donnée à la police courante (déjà settée).
+function wrapAt(ctx: SKRSContext2D, text: string, maxW: number): string[] {
+    const words = text.split(/\s+/).filter(Boolean);
     const lines: string[] = [];
     let line = '';
+    const pushBroken = (chunk: string) => {
+        // Coupe un mot plus large que la colonne.
+        let cur = chunk;
+        while (ctx.measureText(cur).width > maxW && cur.length > 1) {
+            let cut = cur.length - 1;
+            while (cut > 1 && ctx.measureText(cur.slice(0, cut)).width > maxW) cut--;
+            lines.push(cur.slice(0, cut));
+            cur = cur.slice(cut);
+        }
+        line = cur;
+    };
     for (const w of words) {
         const test = line ? `${line} ${w}` : w;
-        if (ctx.measureText(test).width > maxWidth && line) {
+        if (ctx.measureText(test).width > maxW && line) {
             lines.push(line);
-            line = w;
-            if (lines.length === maxLines - 1) break;
+            if (ctx.measureText(w).width > maxW) pushBroken(w);
+            else line = w;
+        } else if (ctx.measureText(test).width > maxW) {
+            pushBroken(w);
         } else {
             line = test;
         }
     }
-    if (lines.length < maxLines) lines.push(line);
-    // Ellipse la dernière ligne si trop longue
-    let last = lines[lines.length - 1] || '';
-    while (ctx.measureText(last + '…').width > maxWidth && last.length > 1) last = last.slice(0, -1);
-    if (last !== (lines[lines.length - 1] || '') && last) lines[lines.length - 1] = last + '…';
-    return lines.filter(Boolean);
+    if (line) lines.push(line);
+    return lines;
+}
+
+// Choisit la plus grande taille de police (entre min et max) pour que `text`
+// tienne entièrement dans (maxW x maxH). Ellipse en dernier recours.
+function fitText(
+    ctx: SKRSContext2D, text: string, maxW: number, maxH: number,
+    family: string, max: number, min: number
+): { lines: string[]; size: number; lineH: number } {
+    for (let size = max; size >= min; size--) {
+        ctx.font = `${size}px ${family}`;
+        const lineH = size + 3;
+        const lines = wrapAt(ctx, text, maxW);
+        if (lines.length * lineH <= maxH) return { lines, size, lineH };
+    }
+    // Taille mini : on tronque au nombre de lignes possible.
+    const size = min;
+    const lineH = size + 3;
+    ctx.font = `${size}px ${family}`;
+    let lines = wrapAt(ctx, text, maxW);
+    const maxLines = Math.max(1, Math.floor(maxH / lineH));
+    if (lines.length > maxLines) {
+        lines = lines.slice(0, maxLines);
+        let last = lines[maxLines - 1];
+        while (ctx.measureText(last + '…').width > maxW && last.length > 1) last = last.slice(0, -1);
+        lines[maxLines - 1] = last + '…';
+    }
+    return { lines, size, lineH };
 }
 
 // Normalise un item d'agenda MyGes vers notre structure interne.
@@ -122,32 +178,79 @@ function toCourse(raw: any): Course {
     const distanciel = raw.modality === 'Distanciel' || (raw.rooms && raw.rooms.some((r: any) => (r.name || '').toLowerCase().includes('distanciel')));
     const exam = /examen|partiel|soutenance|rattrapage|final/i.test(raw.name || '');
     let rooms = '';
-    let campus = '';
+    let campusRaw = '';
     if (!distanciel && raw.rooms && raw.rooms.length > 0) {
         rooms = raw.rooms.map((r: any) => r.name).join(', ');
-        campus = raw.rooms[0].campus || '';
+        campusRaw = raw.rooms[0].campus || '';
     }
     return {
         name,
         start: new Date(raw.start_date),
         end: new Date(raw.end_date),
         rooms,
-        campus,
+        campusKey: campusKey(campusRaw, distanciel),
         teacher: raw.teacher ? String(raw.teacher).replace('M. ', '').replace('Mme ', '') : '',
         distanciel,
         exam,
-        color: exam ? EXAM_COLOR : hashColor(name),
+        color: '#747f8d',
+        col: 0,
+        cols: 1,
     };
 }
 
+// Anti-superposition : attribue à chaque cours d'une journée une sous-colonne
+// (col / cols) de sorte que deux cours qui se chevauchent soient côte à côte.
+function layoutDay(events: Course[]) {
+    events.sort((a, b) => a.start.getTime() - b.start.getTime() || a.end.getTime() - b.end.getTime());
+    let group: Course[] = [];
+    let colEnds: number[] = []; // fin (ms) du dernier cours de chaque colonne
+    let groupEnd = -Infinity;
+
+    const flush = () => {
+        for (const e of group) e.cols = colEnds.length || 1;
+        group = [];
+        colEnds = [];
+        groupEnd = -Infinity;
+    };
+
+    for (const ev of events) {
+        if (ev.start.getTime() >= groupEnd && group.length) flush();
+        let placed = false;
+        for (let c = 0; c < colEnds.length; c++) {
+            if (ev.start.getTime() >= colEnds[c]) {
+                ev.col = c;
+                colEnds[c] = ev.end.getTime();
+                placed = true;
+                break;
+            }
+        }
+        if (!placed) {
+            ev.col = colEnds.length;
+            colEnds.push(ev.end.getTime());
+        }
+        group.push(ev);
+        groupEnd = Math.max(groupEnd, ev.end.getTime());
+    }
+    if (group.length) flush();
+}
+
 // --- RENDU PRINCIPAL ---
-// dayDates : liste des jours (00:00) à afficher côte à côte.
 function renderGrid(title: string, subtitle: string, dayDates: Date[], rawCourses: any[]): Buffer {
     ensureFonts();
 
     const courses = (rawCourses || []).map(toCourse).filter((c) => !isNaN(c.start.getTime()) && !isNaN(c.end.getTime()));
 
-    // Plage horaire dynamique (bornée 8h–20h par défaut)
+    // Couleurs par campus (connus + secours pour inconnus), dans l'ordre d'apparition.
+    const campusColor = new Map<string, string>();
+    let fi = 0;
+    for (const c of courses) {
+        if (!campusColor.has(c.campusKey)) {
+            campusColor.set(c.campusKey, CAMPUS_COLORS[c.campusKey] || FALLBACK[fi++ % FALLBACK.length]);
+        }
+        c.color = campusColor.get(c.campusKey)!;
+    }
+
+    // Plage horaire dynamique (bornée 8h–19h par défaut)
     let minH = 8;
     let maxH = 19;
     for (const c of courses) {
@@ -159,35 +262,76 @@ function renderGrid(title: string, subtitle: string, dayDates: Date[], rawCourse
 
     // Géométrie
     const PAD = 28;
-    const titleH = 78;
     const dayHeadH = 52;
     const gutterW = 58;
-    const hourH = 68; // hauteur d'une heure
+    const hourH = 72;
     const colGap = 6;
     const nDays = dayDates.length;
     const colW = nDays === 1 ? 560 : 190;
 
     const gridW = gutterW + nDays * colW;
     const width = PAD * 2 + gridW;
-    const gridTop = PAD + titleH + dayHeadH;
+
+    // En-tête + légende (hauteur dynamique selon le nombre de campus)
+    const legendItems = [...campusColor.entries()];
+    const headerTop = PAD + 66; // titre + sous-titre
+    const legendRowH = 24;
+    // On mesure combien d'items tiennent par ligne
+    const tmp = createCanvas(10, 10).getContext('2d');
+    tmp.font = `13px ${FONT}`;
+    const itemW = (label: string) => 18 + tmp.measureText(label).width + 18;
+    let legendRows = legendItems.length ? 1 : 0;
+    {
+        let x = 0;
+        for (const [label] of legendItems) {
+            const w = itemW(label);
+            if (x + w > gridW && x > 0) {
+                legendRows++;
+                x = 0;
+            }
+            x += w;
+        }
+    }
+    const legendH = legendRows * legendRowH;
+    const gridTop = headerTop + legendH + 10 + dayHeadH;
     const gridH = (maxH - minH) * hourH;
     const height = gridTop + gridH + PAD;
 
     const canvas = createCanvas(width, height);
     const ctx = canvas.getContext('2d');
-    ctx.textBaseline = 'alphabetic';
 
     // Fond
     ctx.fillStyle = COL.bg;
     ctx.fillRect(0, 0, width, height);
 
-    // Titre
+    // Titre + sous-titre
+    ctx.textBaseline = 'alphabetic';
+    ctx.textAlign = 'left';
     ctx.fillStyle = COL.text;
     ctx.font = `28px ${FONT_BOLD}`;
     ctx.fillText(title, PAD, PAD + 30);
     ctx.fillStyle = COL.muted;
-    ctx.font = `16px ${FONT}`;
-    ctx.fillText(subtitle, PAD, PAD + 56);
+    ctx.font = `15px ${FONT}`;
+    ctx.fillText(subtitle, PAD, PAD + 54);
+
+    // Légende campus
+    ctx.textBaseline = 'middle';
+    let lx = PAD;
+    let ly = headerTop + 12;
+    for (const [label, color] of legendItems) {
+        const w = itemW(label);
+        if (lx - PAD + w > gridW && lx > PAD) {
+            lx = PAD;
+            ly += legendRowH;
+        }
+        ctx.fillStyle = color;
+        roundRect(ctx, lx, ly - 6, 12, 12, 3);
+        ctx.fill();
+        ctx.fillStyle = COL.muted;
+        ctx.font = `13px ${FONT}`;
+        ctx.fillText(label, lx + 18, ly + 1);
+        lx += w;
+    }
 
     const gridLeft = PAD + gutterW;
 
@@ -197,6 +341,7 @@ function renderGrid(title: string, subtitle: string, dayDates: Date[], rawCourse
     ctx.fill();
 
     // Lignes horaires + labels
+    ctx.textBaseline = 'alphabetic';
     ctx.textAlign = 'right';
     for (let h = minH; h <= maxH; h++) {
         const y = gridTop + (h - minH) * hourH;
@@ -206,20 +351,18 @@ function renderGrid(title: string, subtitle: string, dayDates: Date[], rawCourse
         ctx.moveTo(gridLeft, y + 0.5);
         ctx.lineTo(PAD + gridW, y + 0.5);
         ctx.stroke();
-
         ctx.fillStyle = COL.faint;
         ctx.font = `13px ${FONT}`;
         ctx.fillText(`${String(h).padStart(2, '0')}h`, gridLeft - 10, y + 4);
     }
     ctx.textAlign = 'left';
 
-    // En-têtes de jour + séparateurs de colonnes + cours
+    // En-têtes de jour + cours
     const now = new Date();
     dayDates.forEach((day, di) => {
         const colX = gridLeft + di * colW;
         const isToday = sameDay(day, now);
 
-        // Séparateur vertical
         if (di > 0) {
             ctx.strokeStyle = COL.grid;
             ctx.beginPath();
@@ -227,8 +370,6 @@ function renderGrid(title: string, subtitle: string, dayDates: Date[], rawCourse
             ctx.lineTo(colX + 0.5, gridTop + gridH);
             ctx.stroke();
         }
-
-        // Surlignage colonne du jour courant
         if (isToday) {
             ctx.fillStyle = hexToRgba('#5865f2', 0.08);
             ctx.fillRect(colX, gridTop, colW, gridH);
@@ -237,12 +378,12 @@ function renderGrid(title: string, subtitle: string, dayDates: Date[], rawCourse
         // En-tête jour
         const hd = dayHeader(day);
         ctx.textAlign = 'center';
+        ctx.textBaseline = 'alphabetic';
         const cx = colX + colW / 2;
         ctx.fillStyle = isToday ? '#ffffff' : COL.muted;
         ctx.font = `16px ${FONT_BOLD}`;
         ctx.fillText(hd.label, cx, gridTop - dayHeadH + 24);
         if (isToday) {
-            // pastille date
             const dw = ctx.measureText(hd.date).width + 18;
             ctx.fillStyle = '#5865f2';
             roundRect(ctx, cx - dw / 2, gridTop - dayHeadH + 30, dw, 22, 11);
@@ -255,66 +396,24 @@ function renderGrid(title: string, subtitle: string, dayDates: Date[], rawCourse
         ctx.fillText(hd.date, cx, gridTop - dayHeadH + 45);
         ctx.textAlign = 'left';
 
-        // Cours du jour
-        const dayCourses = courses.filter((c) => sameDay(c.start, day)).sort((a, b) => a.start.getTime() - b.start.getTime());
+        // Cours du jour (avec anti-superposition)
+        const dayCourses = courses.filter((c) => sameDay(c.start, day));
+        layoutDay(dayCourses);
         for (const c of dayCourses) {
             const startMin = c.start.getHours() * 60 + c.start.getMinutes() - minH * 60;
             const durMin = Math.max(30, (c.end.getTime() - c.start.getTime()) / 60000);
-            const bx = colX + colGap;
+            const usableW = colW - colGap * 2;
+            const subW = usableW / c.cols;
+            const bx = colX + colGap + c.col * subW + (c.col > 0 ? 2 : 0);
+            const bw = subW - (c.cols > 1 ? 4 : 0);
             const by = gridTop + (startMin / 60) * hourH + 2;
-            const bw = colW - colGap * 2;
             const bh = (durMin / 60) * hourH - 4;
 
-            // Bloc
-            ctx.fillStyle = hexToRgba(c.color, 0.16);
-            roundRect(ctx, bx, by, bw, bh, 8);
-            ctx.fill();
-            // Barre d'accent gauche
-            ctx.fillStyle = c.color;
-            roundRect(ctx, bx, by, 5, bh, 3);
-            ctx.fill();
-
-            // Zone de texte (clippée à la hauteur du bloc)
-            ctx.save();
-            roundRect(ctx, bx, by, bw, bh, 8);
-            ctx.clip();
-
-            const tx = bx + 14;
-            const tw = bw - 20;
-            let ty = by + 18;
-
-            ctx.fillStyle = COL.faint;
-            ctx.font = `11px ${FONT}`;
-            ctx.fillText(`${fmtHM(c.start)} – ${fmtHM(c.end)}`, tx, ty);
-            ty += 17;
-
-            ctx.fillStyle = COL.text;
-            ctx.font = `14px ${FONT_BOLD}`;
-            const nameLines = wrapText(ctx, c.name, tw, bh > 80 ? 3 : 2);
-            for (const ln of nameLines) {
-                ctx.fillText(ln, tx, ty);
-                ty += 17;
-            }
-
-            ty += 2;
-            ctx.fillStyle = COL.muted;
-            ctx.font = `11px ${FONT}`;
-            const loc = c.distanciel ? 'Distanciel' : c.rooms + (c.campus ? ` · ${c.campus}` : '');
-            if (loc) {
-                for (const ln of wrapText(ctx, loc, tw, 2)) {
-                    ctx.fillText(ln, tx, ty);
-                    ty += 15;
-                }
-            }
-            if (c.teacher && bh > 96) {
-                ctx.fillStyle = COL.faint;
-                ctx.fillText(wrapText(ctx, c.teacher, tw, 1)[0] || '', tx, ty);
-            }
-            ctx.restore();
+            drawBlock(ctx, c, bx, by, bw, bh);
         }
     });
 
-    // Ligne "maintenant" si un des jours affichés est aujourd'hui
+    // Ligne "maintenant"
     if (dayDates.some((d) => sameDay(d, now))) {
         const nowMin = now.getHours() * 60 + now.getMinutes() - minH * 60;
         if (nowMin >= 0 && nowMin <= (maxH - minH) * 60) {
@@ -333,6 +432,87 @@ function renderGrid(title: string, subtitle: string, dayDates: Date[], rawCourse
     }
 
     return canvas.toBuffer('image/png');
+}
+
+// Dessine un bloc de cours avec texte adapté dynamiquement à sa taille.
+function drawBlock(ctx: SKRSContext2D, c: Course, bx: number, by: number, bw: number, bh: number) {
+    // Fond teinté + barre d'accent + éventuelle bordure "examen"
+    ctx.fillStyle = hexToRgba(c.color, 0.18);
+    roundRect(ctx, bx, by, bw, bh, 8);
+    ctx.fill();
+    ctx.fillStyle = c.color;
+    roundRect(ctx, bx, by, 5, bh, 3);
+    ctx.fill();
+    if (c.exam) {
+        ctx.strokeStyle = EXAM_BORDER;
+        ctx.lineWidth = 2;
+        roundRect(ctx, bx + 1, by + 1, bw - 2, bh - 2, 7);
+        ctx.stroke();
+    }
+
+    ctx.save();
+    roundRect(ctx, bx, by, bw, bh, 8);
+    ctx.clip();
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+
+    const padX = 8;
+    const innerX = bx + 7 + padX;
+    const innerW = bw - (7 + padX) - padX;
+    const padY = 6;
+    let cy = by + padY;
+
+    if (innerW < 26) {
+        ctx.restore();
+        return; // colonne trop étroite : on laisse la couleur parler
+    }
+
+    // Ligne horaire (compacte)
+    const timeSize = bh < 46 ? 9 : 10;
+    ctx.font = `${timeSize}px ${FONT}`;
+    ctx.fillStyle = COL.faint;
+    ctx.fillText(`${fmtHM(c.start)} – ${fmtHM(c.end)}`, innerX, cy);
+    cy += timeSize + 4;
+
+    // Métadonnées à afficher selon la place disponible
+    const loc = c.distanciel ? 'Distanciel' : c.rooms + (c.campusKey && c.campusKey !== 'Autre' ? ` · ${c.campusKey}` : '');
+    const wantLoc = bh >= 48 && loc;
+    const wantTeacher = bh >= 78 && c.teacher;
+
+    // Réserve verticale pour loc + prof (mesurée à 10px)
+    let metaLines: { text: string; color: string }[] = [];
+    if (wantLoc) {
+        ctx.font = `10px ${FONT}`;
+        for (const ln of wrapAt(ctx, loc, innerW).slice(0, bh >= 70 ? 2 : 1)) metaLines.push({ text: ln, color: COL.muted });
+    }
+    if (wantTeacher) {
+        ctx.font = `10px ${FONT}`;
+        metaLines.push({ text: wrapAt(ctx, c.teacher, innerW)[0] || '', color: COL.faint });
+    }
+    const metaH = metaLines.length * 13;
+
+    // Titre : occupe l'espace restant, taille adaptée pour tout faire tenir
+    const titleMaxH = by + bh - padY - cy - metaH - (metaLines.length ? 4 : 0);
+    if (titleMaxH >= 11) {
+        const fit = fitText(ctx, c.name, innerW, titleMaxH, FONT_BOLD, 15, 9);
+        ctx.fillStyle = COL.text;
+        ctx.font = `${fit.size}px ${FONT_BOLD}`;
+        for (const ln of fit.lines) {
+            ctx.fillText(ln, innerX, cy);
+            cy += fit.lineH;
+        }
+    }
+
+    // Métadonnées
+    cy += metaLines.length ? 4 : 0;
+    ctx.font = `10px ${FONT}`;
+    for (const m of metaLines) {
+        ctx.fillStyle = m.color;
+        ctx.fillText(m.text, innerX, cy);
+        cy += 13;
+    }
+
+    ctx.restore();
 }
 
 // --- API publique ---
