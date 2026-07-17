@@ -8,16 +8,17 @@ import { BOT_VERSION } from '../config';
  */
 export function buildChangelogEmbed(client: Client): EmbedBuilder {
     return new EmbedBuilder()
-        .setTitle(`🚀 Mise à jour ${BOT_VERSION} - "Emploi du temps en image"`)
-        .setDescription("La plus grosse refonte visuelle du bot : votre emploi du temps devient un véritable planning graphique, et l'affichage des projets et actus a été repensé.")
+        .setTitle(`🚀 Mise à jour ${BOT_VERSION} - "Multi-serveurs"`)
+        .setDescription("Version majeure : **un seul bot pour toutes les promos**. Chaque serveur a désormais sa propre configuration, réglable directement depuis Discord.")
         .setColor(0x5865f2)
         .setThumbnail(client.user?.displayAvatarURL() || null)
         .addFields(
-            { name: '🗓️ Agenda en image', value: '• `/agenda` affiche désormais un **vrai planning en grille** (vues `Jour` et `Semaine`) au lieu de simple texte.\n• Ligne **« maintenant »** en direct et jour courant surligné.' },
-            { name: '🎨 Couleur par campus', value: '• Chaque cours est **coloré selon son campus** (Nation, Voltaire, Erard, Rauch...) avec une **légende**.\n• Les **examens** sont automatiquement **encadrés en rouge**.' },
-            { name: '🧩 Lisibilité améliorée', value: '• Les cours simultanés sont **séparés automatiquement** (fini les blocs superposés).\n• Le texte **s\'adapte** à la taille du bloc pour rester lisible.' },
-            { name: '📂 Projets & 📰 Actus', value: '• `/projets` : **compte à rebours en direct** sur chaque échéance, affichage aéré et trié par urgence.\n• `/news` : présentation nettoyée, dates dynamiques et extrait de contenu.' },
-            { name: '🔒 Fiabilité (sous le capot)', value: '• **Reconnexion automatique** quand la session MyGes expire.\n• Chiffrement des identifiants renforcé et détection automatique de l\'année scolaire.' }
+            { name: '🏫 Un bot, plusieurs serveurs', value: '• Fini un bot par promo : le même bot gère **plusieurs serveurs**, chacun avec **sa propre configuration** (salons, compte de référence, alertes).\n• Les projets annoncés sont **cloisonnés par serveur** : aucun mélange entre promos.' },
+            { name: '⚙️ Configuration en jeu : `/config`', value: '• Un **panneau interactif** pour tout régler : sélection des salons et du compte de référence **en quelques clics**.\n• Plus besoin de toucher au code ou de redémarrer le bot.' },
+            { name: '👤 Compte MyGes de référence', value: '• Chaque serveur choisit **quel compte** alimente ses alertes projets.\n• Le panneau indique si le compte est **connecté** ou non.' },
+            { name: '🔒 Réservé aux administrateurs', value: '• `/config` est **invisible et inaccessible** à toute personne sans la permission **Administrateur**.' },
+            { name: '🛠️ Fiabilité', value: '• Les nouveaux projets sont **enregistrés immédiatement** : plus d\'alertes en double.\n• Sauvegarde plus sûre (écriture atomique) et **logs serveur détaillés**.' },
+            { name: '⚠️ Action requise', value: '• Un **administrateur** doit lancer **`/config`** sur chaque serveur pour (ré)activer les alertes projets et les annonces de mise à jour.' }
         )
         .setFooter({ text: "Merci d'utiliser MyGes Bot ! 🎓" })
         .setTimestamp();
@@ -26,7 +27,7 @@ export function buildChangelogEmbed(client: Client): EmbedBuilder {
 const command: Command = {
     data: new SlashCommandBuilder()
         .setName('changelog')
-        .setDescription('Affiche les dernières nouveautés du bot (v2.0)'),
+        .setDescription('Affiche les dernières nouveautés du bot'),
 
     execute: async (interaction: ChatInputCommandInteraction) => {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
