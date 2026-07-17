@@ -19,7 +19,7 @@ const command: Command = {
                 { name: '📅 Organisation', value: '` /agenda ` : Emploi du temps de la semaine\n` /prochain ` : Le prochain cours à venir (Compte à rebours)\n` /projets ` : Liste des projets et deadlines' },
                 { name: '🎓 Scolarité', value: '` /notes ` : Bulletin de notes et moyennes\n` /absences ` : Liste des absences' },
                 { name: "🏫 Vie de l'École", value: '` /trombi ` : Voir les élèves de ta classe\n` /profs ` : Liste et emails de tes intervenants\n` /campus ` : Codes d\'accès et adresses\n` /news ` : Actualités de l\'école' },
-                { name: '⚙️ Système', value: '` /ping ` : Vérifier l\'état du bot et de MyGes\n` /changelog ` : Voir les dernières mises à jour' }
+                { name: '⚙️ Système', value: '` /ping ` : Vérifier l\'état du bot et de MyGes\n` /changelog ` : Voir les dernières mises à jour\n` /config ` : Configurer le bot *(administrateurs)*' }
             )
             .setFooter({ text: 'Bot développé avec ❤️ (Amour si vous avez pas saisi)' });
 

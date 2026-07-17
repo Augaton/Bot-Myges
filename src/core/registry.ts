@@ -16,11 +16,12 @@ import campus from '../commands/campus';
 import changelog from '../commands/changelog';
 import help from '../commands/help';
 import ping from '../commands/ping';
+import config from '../commands/config';
 
 // Ordre conservé pour l'affichage dans Discord.
 const all: Command[] = [
     login, logout, prochain, agenda, notes, absences, projets, profil,
-    news, profs, trombi, campus, changelog, help, ping,
+    news, profs, trombi, campus, changelog, help, ping, config,
 ];
 
 // Map name -> Command pour le routage des interactions.
