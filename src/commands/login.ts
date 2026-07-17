@@ -7,6 +7,7 @@ import { GesAPI } from '../myges/ges-api';
 import { encrypt } from '../crypto';
 import { loadData, makeSession, saveData, sessions } from '../core/store';
 import { checkNewProjects } from '../tasks/projects';
+import { log, logError } from '../utils/logger';
 
 export const LOGIN_MODAL_ID = 'loginModal';
 
@@ -66,16 +67,15 @@ export async function handleLoginModal(interaction: ModalSubmitInteraction) {
             content: `✅ **Connexion réussie !**\nBonjour **${username}**, je suis connecté à ton compte MyGes.\nTu peux maintenant utiliser \`/agenda\`, \`/notes\`, etc.`,
         });
 
-        console.log(`✅ Utilisateur ${username} (${interaction.user.id}) connecté.`);
+        log('AUTH', `Connexion réussie : ${username} (${interaction.user.id})`);
 
         // Premier check pour charger les données (projets, etc.)
         checkNewProjects(interaction.client);
     } catch (error) {
-        console.error(error);
+        logError('AUTH', `Échec de connexion : ${username} (${interaction.user.id})`, error);
         await interaction.editReply({
             content: '❌ **Échec de la connexion.**\nVérifie tes identifiants.\n*(Si le problème persiste, MyGes est peut-être en maintenance)*',
         });
-        console.log(`❌ Échec de connexion pour l'utilisateur ${username} (${interaction.user.id}).`);
     }
 }
 

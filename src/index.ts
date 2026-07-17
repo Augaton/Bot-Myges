@@ -6,6 +6,7 @@ import { handleLoginModal, LOGIN_MODAL_ID } from './commands/login';
 import { autoLoginUsers } from './tasks/autoLogin';
 import { checkNewProjects } from './tasks/projects';
 import { announceUpdateIfNeeded } from './tasks/announceUpdate';
+import { log, logError } from './utils/logger';
 
 dotenv.config();
 
@@ -13,7 +14,7 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
 // --- INIT ---
 client.once(Events.ClientReady, async () => {
-    console.log(`🤖 Bot connecté : ${client.user?.tag}`);
+    log('BOOT', `Bot connecté : ${client.user?.tag} (${BOT_VERSION})`);
 
     // 1. Statut (instantané visuellement)
     client.user?.setPresence({
@@ -46,15 +47,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isChatInputCommand()) {
         const command = commands.get(interaction.commandName);
         if (!command) return;
+        const who = `${interaction.user.tag} (${interaction.user.id})`;
+        log('CMD', `/${interaction.commandName} par ${who}`);
         try {
             await command.execute(interaction);
         } catch (e) {
-            console.error(`❌ Erreur commande /${interaction.commandName} :`, e);
+            logError('CMD', `Erreur /${interaction.commandName} (${who}) :`, e);
         }
         return;
     }
 
     if (interaction.isModalSubmit()) {
+        log('MODAL', `${interaction.customId} par ${interaction.user.tag} (${interaction.user.id})`);
         if (interaction.customId === LOGIN_MODAL_ID) {
             await handleLoginModal(interaction);
         }
