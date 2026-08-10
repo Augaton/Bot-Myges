@@ -1,17 +1,22 @@
 import {
     ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, ChatInputCommandInteraction,
-    ComponentType, EmbedBuilder, MessageFlags, ModalBuilder, SlashCommandBuilder, TextInputBuilder,
-    TextInputStyle,
+    EmbedBuilder, MessageFlags, SlashCommandBuilder, StringSelectMenuBuilder,
 } from 'discord.js';
 import { Command } from '../core/command';
 import { TimetableService } from '../myges/services/timetable';
 import { sessions } from '../core/store';
 import { renderDayImage, renderWeekImage } from '../utils/agendaImage';
+import { logError } from '../utils/logger';
+import { addDays, dayOptions, fromKey, getMonday, sameDay, startOfDay, weekOptions } from '../utils/datePicker';
+import { shareRow, SHARE_ID } from '../utils/share';
 
 interface AgendaView {
     embeds: EmbedBuilder[];
     files: AttachmentBuilder[];
 }
+
+// Amplitude du décalage de la fenêtre de semaines proposées (≈ 3 mois).
+const WINDOW_SHIFT_WEEKS = 13;
 
 const command: Command = {
     data: new SlashCommandBuilder()
@@ -29,15 +34,6 @@ const command: Command = {
             return;
         }
 
-        const getMonday = (d: Date) => {
-            const date = new Date(d);
-            const day = date.getDay();
-            const diff = date.getDate() - day + (day === 0 ? -6 : 1);
-            date.setDate(diff);
-            date.setHours(0, 0, 0, 0);
-            return date;
-        };
-
         const errorView = (msg: string): AgendaView => ({
             embeds: [new EmbedBuilder().setTitle('Erreur').setDescription(msg).setColor(0xff0000)],
             files: [],
@@ -51,14 +47,12 @@ const command: Command = {
             let start: Date;
             let end: Date;
             if (mode === 'day') {
-                start = new Date(refDate);
-                start.setHours(0, 0, 0, 0);
+                start = startOfDay(refDate);
                 end = new Date(start);
                 end.setHours(23, 59, 59);
             } else {
                 start = getMonday(refDate);
-                end = new Date(start);
-                end.setDate(end.getDate() + 6);
+                end = addDays(start, 6);
                 end.setHours(23, 59, 59);
             }
 
@@ -75,80 +69,157 @@ const command: Command = {
                     .setImage('attachment://agenda.png');
                 return { embeds: [embed], files: [file] };
             } catch (e) {
-                console.error('[Agenda Error]', e);
+                logError('AGENDA', "Impossible de générer l'agenda :", e);
                 return errorView("Impossible de récupérer l'agenda.");
             }
         };
 
+        // --- ÉTAT DE NAVIGATION ---
         let currentMode: 'day' | 'week' = 'week';
         let currentDate = new Date();
+        // Sélecteur de date : semaine servant de centre à la liste proposée, et
+        // semaine dont on détaille les jours (mode jour).
+        let pickerAnchor = getMonday(currentDate);
+        let pickerWeek = getMonday(currentDate);
 
-        const getRow = (m: 'day' | 'week') => {
-            const isToday = new Date().toDateString() === currentDate.toDateString();
-            const labelSwitch = m === 'day' ? '📅 Voir Semaine' : '📆 Voir Jour';
+        // --- BARRE DE NAVIGATION ---
+        const navRow = () => {
+            const today = new Date();
+            const onToday = currentMode === 'day'
+                ? sameDay(today, currentDate)
+                : sameDay(getMonday(today), getMonday(currentDate));
             return new ActionRowBuilder<ButtonBuilder>().addComponents(
                 new ButtonBuilder().setCustomId('prev').setLabel('⬅️').setStyle(ButtonStyle.Secondary),
-                new ButtonBuilder().setCustomId('today').setLabel("Aujourd'hui").setStyle(ButtonStyle.Primary).setDisabled(isToday),
+                new ButtonBuilder().setCustomId('today').setLabel("Aujourd'hui").setStyle(ButtonStyle.Primary).setDisabled(onToday),
                 new ButtonBuilder().setCustomId('next').setLabel('➡️').setStyle(ButtonStyle.Secondary),
-                new ButtonBuilder().setCustomId('switch').setLabel(labelSwitch).setStyle(ButtonStyle.Success),
-                new ButtonBuilder().setCustomId('jump').setLabel('🔍 Aller à...').setStyle(ButtonStyle.Secondary)
+                new ButtonBuilder().setCustomId('switch')
+                    .setLabel(currentMode === 'day' ? '📅 Voir Semaine' : '📆 Voir Jour').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId('jump').setLabel('🗓️ Aller à...').setStyle(ButtonStyle.Secondary)
             );
+        };
+
+        // --- SÉLECTEUR DE DATE ---
+        // Mode semaine : une seule liste de semaines, choisie = appliquée.
+        // Mode jour    : la semaine choisie alimente la liste des jours.
+        const pickerRows = () => {
+            const today = new Date();
+            // En mode jour, la semaine cochée est celle qu'on est en train de
+            // détailler ; en mode semaine, c'est directement la vue affichée.
+            const selectedWeek = currentMode === 'day' ? pickerWeek : currentDate;
+
+            const weekMenu = new StringSelectMenuBuilder()
+                .setCustomId('pick_week')
+                .setPlaceholder(currentMode === 'day' ? '🗓️ 1. Choisis une semaine' : '🗓️ Choisis une semaine')
+                .addOptions(weekOptions(pickerAnchor, selectedWeek, today));
+
+            const rows: any[] = [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(weekMenu)];
+
+            if (currentMode === 'day') {
+                rows.push(
+                    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+                        new StringSelectMenuBuilder()
+                            .setCustomId('pick_day')
+                            .setPlaceholder('📆 2. Choisis un jour')
+                            .addOptions(dayOptions(pickerWeek, currentDate, today))
+                    )
+                );
+            }
+
+            rows.push(
+                new ActionRowBuilder<ButtonBuilder>().addComponents(
+                    new ButtonBuilder().setCustomId('pick_back').setLabel('⏪ 3 mois').setStyle(ButtonStyle.Secondary),
+                    new ButtonBuilder().setCustomId('pick_today').setLabel("📍 Aujourd'hui").setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder().setCustomId('pick_fwd').setLabel('3 mois ⏩').setStyle(ButtonStyle.Secondary),
+                    new ButtonBuilder().setCustomId('pick_cancel').setLabel('↩️ Retour').setStyle(ButtonStyle.Danger)
+                )
+            );
+            return rows;
+        };
+
+        const refresh = async () => {
+            await interaction.editReply({
+                ...(await generateAgenda(currentMode, currentDate)),
+                components: [navRow(), shareRow()],
+            });
         };
 
         const msg = await interaction.editReply({
             ...(await generateAgenda(currentMode, currentDate)),
-            components: [getRow(currentMode)],
+            components: [navRow(), shareRow()],
         });
 
-        const col = msg.createMessageComponentCollector({ componentType: ComponentType.Button, time: 300000 });
+        // Un seul collecteur pour boutons et menus déroulants.
+        const col = msg.createMessageComponentCollector({ time: 300_000 });
 
         col.on('collect', async (i) => {
-            if (i.user.id !== interaction.user.id) return i.reply({ content: 'Pas touche !', flags: MessageFlags.Ephemeral });
+            if (i.user.id !== interaction.user.id) {
+                return i.reply({ content: 'Pas touche !', flags: MessageFlags.Ephemeral });
+            }
+            col.resetTimer(); // tant que l'utilisateur navigue, la session reste ouverte
+            if (i.customId === SHARE_ID) return; // traité par le routeur global
+            await i.deferUpdate();
 
-            if (i.customId === 'jump') {
-                const modal = new ModalBuilder().setCustomId('jump_modal').setTitle('Aller à une date');
-                const dateInput = new TextInputBuilder().setCustomId('date_input').setLabel('Date (JJ/MM)').setStyle(TextInputStyle.Short).setMaxLength(5).setRequired(true);
-                modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(dateInput));
-                await i.showModal(modal);
-                try {
-                    const submit = await i.awaitModalSubmit({ time: 60000, filter: (s) => s.user.id === i.user.id });
-                    const val = submit.fields.getTextInputValue('date_input');
-                    const [day, month] = val.split('/').map(Number);
-                    if (!day || !month || day > 31 || month > 12) {
-                        await submit.reply({ content: '❌ Date invalide.', flags: MessageFlags.Ephemeral });
+            try {
+                // --- Sélecteur de date ---
+                if (i.isStringSelectMenu()) {
+                    const picked = fromKey(i.values[0]);
+                    if (i.customId === 'pick_week' && currentMode === 'day') {
+                        // On reste dans le sélecteur : la semaine choisie alimente les jours.
+                        pickerWeek = picked;
+                        pickerAnchor = picked;
+                        await interaction.editReply({ components: pickerRows() });
                         return;
                     }
-                    const newDate = new Date();
-                    newDate.setMonth(month - 1);
-                    newDate.setDate(day);
-                    currentDate = newDate;
-                    await submit.deferUpdate();
-                    await interaction.editReply({ ...(await generateAgenda(currentMode, currentDate)), components: [getRow(currentMode)] });
-                } catch (e) {
-                    // Le plus souvent : l'utilisateur n'a pas validé le modal à temps (timeout). On ignore en loguant.
-                    console.error('[Agenda Jump] modal non soumis ou erreur :', e);
+                    // Semaine (mode semaine) ou jour choisi : on applique et on
+                    // referme le sélecteur.
+                    currentDate = picked;
+                    await refresh();
+                    return;
                 }
-                return;
+
+                switch (i.customId) {
+                    case 'jump': // ouvre le sélecteur (l'image reste affichée)
+                        pickerAnchor = getMonday(currentDate);
+                        pickerWeek = getMonday(currentDate);
+                        return void (await interaction.editReply({ components: pickerRows() }));
+                    case 'pick_cancel':
+                        return void (await interaction.editReply({ components: [navRow(), shareRow()] }));
+                    case 'pick_today':
+                        currentDate = new Date();
+                        return void (await refresh());
+                    case 'pick_back':
+                    case 'pick_fwd': {
+                        // Décale la fenêtre de semaines proposées sans changer la vue.
+                        const dir = i.customId === 'pick_back' ? -1 : 1;
+                        pickerAnchor = addDays(pickerAnchor, dir * WINDOW_SHIFT_WEEKS * 7);
+                        return void (await interaction.editReply({ components: pickerRows() }));
+                    }
+                }
+
+                // --- Navigation classique ---
+                if (i.customId === 'prev') {
+                    currentDate = addDays(currentDate, currentMode === 'day' ? -1 : -7);
+                } else if (i.customId === 'next') {
+                    currentDate = addDays(currentDate, currentMode === 'day' ? 1 : 7);
+                } else if (i.customId === 'today') {
+                    currentDate = new Date();
+                } else if (i.customId === 'switch') {
+                    currentMode = currentMode === 'day' ? 'week' : 'day';
+                }
+                await refresh();
+            } catch (e) {
+                logError('AGENDA', "Mise à jour de l'agenda impossible :", e);
             }
+        });
 
-            await i.deferUpdate();
-            const newDate = new Date(currentDate);
-
-            if (i.customId === 'prev') {
-                newDate.setDate(newDate.getDate() - (currentMode === 'day' ? 1 : 7));
-            } else if (i.customId === 'next') {
-                newDate.setDate(newDate.getDate() + (currentMode === 'day' ? 1 : 7));
-            } else if (i.customId === 'today') {
-                newDate.setTime(new Date().getTime());
-            } else if (i.customId === 'switch') {
-                currentMode = currentMode === 'day' ? 'week' : 'day';
+        col.on('end', async () => {
+            // Retire la navigation devenue inerte, mais garde le partage : le
+            // bouton est routé globalement, il fonctionne encore après coup.
+            try {
+                await interaction.editReply({ components: [shareRow()] });
+            } catch {
+                /* message éphémère déjà expiré : rien à faire */
             }
-
-            currentDate = newDate;
-            await interaction.editReply({
-                ...(await generateAgenda(currentMode, currentDate)),
-                components: [getRow(currentMode)],
-            });
         });
     },
 };

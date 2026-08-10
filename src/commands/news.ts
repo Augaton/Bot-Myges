@@ -3,6 +3,7 @@ import { Command } from '../core/command';
 import { SchoolService } from '../myges/services/school';
 import { sessions } from '../core/store';
 import { snippet } from '../utils/format';
+import { shareRow } from '../utils/share';
 
 const command: Command = {
     data: new SlashCommandBuilder()
@@ -43,7 +44,7 @@ const command: Command = {
                 embed.addFields({ name: `📌 ${title}`, value: parts.join('\n') });
             }
 
-            await interaction.editReply({ embeds: [embed] });
+            await interaction.editReply({ embeds: [embed], components: [shareRow()] });
         } catch (e) {
             console.error(e);
             interaction.editReply('❌ Erreur news.');

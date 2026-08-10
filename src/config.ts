@@ -6,7 +6,7 @@ export const CHECK_INTERVAL = 60 * 60 * 1000;
 export const DB_FILE = './saved_data.json';
 
 // BOT VERSION
-export const BOT_VERSION = 'v3.0.0';
+export const BOT_VERSION = 'v3.1.0';
 
 /**
  * Année scolaire courante au format attendu par l'API MyGes (ex: "2025" pour

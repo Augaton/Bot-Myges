@@ -2,6 +2,7 @@ import { ChatInputCommandInteraction, EmbedBuilder, MessageFlags, SlashCommandBu
 import { Command } from '../core/command';
 import { ProfileService } from '../myges/services/profile';
 import { sessions } from '../core/store';
+import { shareRow } from '../utils/share';
 
 const command: Command = {
     data: new SlashCommandBuilder()
@@ -22,7 +23,7 @@ const command: Command = {
                     { name: 'Email', value: p.email },
                     { name: 'Classe', value: p.classes?.map((c: any) => c.name).join(', ') || '?' }
                 );
-            await interaction.editReply({ embeds: [embed] });
+            await interaction.editReply({ embeds: [embed], components: [shareRow()] });
         } catch (e) {
             console.error(e);
             await interaction.editReply('❌ Erreur.');

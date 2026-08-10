@@ -1,7 +1,7 @@
 import {
     ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelSelectMenuBuilder, ChannelType,
     ChatInputCommandInteraction, EmbedBuilder, MessageFlags, PermissionFlagsBits,
-    SlashCommandBuilder, StringSelectMenuBuilder,
+    SlashCommandBuilder,
 } from 'discord.js';
 import { Command } from '../core/command';
 import { getGuildConfig, loadData, saveData, sessions } from '../core/store';
@@ -18,7 +18,7 @@ const command: Command = {
 
     execute: async (interaction: ChatInputCommandInteraction) => {
         if (!interaction.inGuild() || !interaction.guild) {
-            return interaction.reply({ content: '❌ Cette commande s\'utilise uniquement sur un serveur.', flags: MessageFlags.Ephemeral });
+            return interaction.reply({ content: "❌ Cette commande s'utilise uniquement sur un serveur.", flags: MessageFlags.Ephemeral });
         }
         // Double sécurité : on revérifie la permission côté exécution.
         if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
@@ -29,11 +29,17 @@ const command: Command = {
 
         const guild = interaction.guild;
         const guildId = guild.id;
+        const adminId = interaction.user.id;
 
-        // Construit le panneau (embed + menus) à partir de la config enregistrée.
+        // Construit le panneau (embed + contrôles) à partir de la config enregistrée.
         const render = async () => {
             const data = loadData();
             const cfg = getGuildConfig(data, guildId);
+
+            // Le compte de référence ne peut être que celui de l'admin qui configure :
+            // désigner le compte d'un tiers exposerait ses données sans son accord.
+            const adminHasAccount = !!data.users[adminId];
+            const isSelfRef = cfg.referenceUserId === adminId;
 
             const refStatus = cfg.referenceUserId
                 ? sessions.has(cfg.referenceUserId)
@@ -55,10 +61,18 @@ const command: Command = {
                         name: '📊 État',
                         value: ready
                             ? '✅ Les alertes projets sont actives sur ce serveur.'
-                            : '⚠️ Il faut **un salon d\'alertes** ET **un compte de référence** pour activer les alertes.',
+                            : "⚠️ Il faut **un salon d'alertes** ET **un compte de référence** pour activer les alertes.",
                     }
-                )
-                .setFooter({ text: 'Le compte de référence fournit les projets annoncés sur ce serveur.' });
+                );
+
+            if (!adminHasAccount) {
+                embed.addFields({
+                    name: '❗ Connexion requise',
+                    value: "Tu dois d'abord te connecter avec `/login` pour pouvoir définir **ton** compte comme référence.",
+                });
+            }
+
+            embed.setFooter({ text: 'Confidentialité : seul ton propre compte peut servir de référence.' });
 
             // Sélecteur : salon des alertes projets
             const announceRow = new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(
@@ -76,35 +90,17 @@ const command: Command = {
                     .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
             );
 
-            // Sélecteur : compte de référence (parmi les comptes connectés présents ici)
-            const refMenu = new StringSelectMenuBuilder().setCustomId('cfg_ref');
-            const options: { label: string; value: string; description?: string; default?: boolean }[] = [];
-            for (const userId of Object.keys(data.users).slice(0, 25)) {
-                const member = await guild.members.fetch(userId).catch(() => null);
-                if (!member) continue; // pas membre de ce serveur
-                options.push({
-                    label: member.user.username.slice(0, 100),
-                    value: userId,
-                    description: sessions.has(userId) ? 'Session active' : 'Compte enregistré (hors ligne)',
-                    default: userId === cfg.referenceUserId,
-                });
-            }
-            if (options.length === 0) {
-                refMenu
-                    .setPlaceholder('👤 Aucun compte MyGes connecté sur ce serveur')
-                    .setDisabled(true)
-                    .addOptions({ label: 'Aucun compte disponible', value: 'none' });
-            } else {
-                refMenu.setPlaceholder('👤 Choisir le compte MyGes de référence').addOptions(options);
-            }
-            const refRow = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(refMenu);
-
             const buttonRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+                new ButtonBuilder()
+                    .setCustomId('cfg_ref_self')
+                    .setLabel(isSelfRef ? '✅ Ton compte est la référence' : '👤 Utiliser mon compte comme référence')
+                    .setStyle(isSelfRef ? ButtonStyle.Secondary : ButtonStyle.Primary)
+                    .setDisabled(!adminHasAccount || isSelfRef),
                 new ButtonBuilder().setCustomId('cfg_reset').setLabel('Réinitialiser').setStyle(ButtonStyle.Danger),
                 new ButtonBuilder().setCustomId('cfg_done').setLabel('Terminer').setStyle(ButtonStyle.Success)
             );
 
-            return { embeds: [embed], components: [announceRow, updateRow, refRow, buttonRow] };
+            return { embeds: [embed], components: [announceRow, updateRow, buttonRow] };
         };
 
         const msg = await interaction.editReply(await render());
@@ -112,7 +108,7 @@ const command: Command = {
 
         collector.on('collect', async (i) => {
             if (i.user.id !== interaction.user.id) {
-                return i.reply({ content: 'Ce panneau ne t\'appartient pas.', flags: MessageFlags.Ephemeral });
+                return i.reply({ content: "Ce panneau ne t'appartient pas.", flags: MessageFlags.Ephemeral });
             }
 
             if (i.isButton() && i.customId === 'cfg_done') {
@@ -136,14 +132,20 @@ const command: Command = {
                     cfg.updateChannelId = i.values[0];
                     log('CONFIG', `${guild.name} : salon MAJ = ${i.values[0]} (par ${i.user.tag})`);
                 }
-            } else if (i.isStringSelectMenu() && i.customId === 'cfg_ref') {
-                cfg.referenceUserId = i.values[0];
-                log('CONFIG', `${guild.name} : compte de référence = ${i.values[0]} (par ${i.user.tag})`);
+            } else if (i.isButton() && i.customId === 'cfg_ref_self') {
+                // Uniquement son propre compte : aucune donnée d'un tiers ne peut
+                // être exposée par un administrateur.
+                if (!data.users[i.user.id]) {
+                    await i.followUp({ content: '❌ Connecte-toi d\'abord avec `/login`.', flags: MessageFlags.Ephemeral });
+                    return;
+                }
+                cfg.referenceUserId = i.user.id;
+                log('CONFIG', `${guild.name} : compte de référence = ${i.user.id} (son propre compte)`);
 
                 // Premier paramétrage : on marque les projets DÉJÀ existants comme vus,
                 // sinon le prochain cycle annoncerait tout l'historique d'un coup.
                 if (cfg.knownProjectIds.length === 0) {
-                    const token = sessions.get(i.values[0]);
+                    const token = sessions.get(i.user.id);
                     if (token) {
                         try {
                             const projects = await ProjectService.getProjects(token, getCurrentYear());

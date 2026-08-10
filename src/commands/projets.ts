@@ -4,6 +4,7 @@ import { ProjectService } from '../myges/services/project';
 import { getCurrentYear } from '../config';
 import { sessions } from '../core/store';
 import { getNextStep, snippet } from '../utils/format';
+import { shareRow } from '../utils/share';
 
 const command: Command = {
     data: new SlashCommandBuilder()
@@ -60,7 +61,7 @@ const command: Command = {
                 embed.addFields({ name: `${urgent} ${p.name}`, value: lines.join('\n') });
             }
 
-            await interaction.editReply({ embeds: [embed] });
+            await interaction.editReply({ embeds: [embed], components: [shareRow()] });
         } catch (e) {
             console.error(e);
             await interaction.editReply('❌ Erreur projets.');

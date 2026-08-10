@@ -1,5 +1,6 @@
 import { ChatInputCommandInteraction, EmbedBuilder, MessageFlags, SlashCommandBuilder } from 'discord.js';
 import { Command } from '../core/command';
+import { shareRow } from '../utils/share';
 
 const command: Command = {
     data: new SlashCommandBuilder()
@@ -21,9 +22,10 @@ const command: Command = {
                 { name: "🏫 Vie de l'École", value: '` /trombi ` : Voir les élèves de ta classe\n` /profs ` : Liste et emails de tes intervenants\n` /campus ` : Codes d\'accès et adresses\n` /news ` : Actualités de l\'école' },
                 { name: '⚙️ Système', value: '` /ping ` : Vérifier l\'état du bot et de MyGes\n` /changelog ` : Voir les dernières mises à jour\n` /config ` : Configurer le bot *(administrateurs)*' }
             )
+            .addFields({ name: '💡 Astuce', value: "Mes réponses ne sont visibles que par toi. Le bouton **📢 Partager dans le salon** en publie une copie pour tout le monde, pratique pour montrer un emploi du temps sans que l'autre ait à lancer la commande." })
             .setFooter({ text: 'Bot développé avec ❤️ (Amour si vous avez pas saisi)' });
 
-        await interaction.editReply({ embeds: [embed] });
+        await interaction.editReply({ embeds: [embed], components: [shareRow()] });
     },
 };
 

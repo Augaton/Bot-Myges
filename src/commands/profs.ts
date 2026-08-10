@@ -6,6 +6,8 @@ import { Command } from '../core/command';
 import { SchoolService } from '../myges/services/school';
 import { getCurrentYear } from '../config';
 import { sessions } from '../core/store';
+import { fetchPhotoBuffer } from '../utils/photo';
+import { shareRow, SHARE_ID } from '../utils/share';
 
 const command: Command = {
     data: new SlashCommandBuilder()
@@ -25,6 +27,9 @@ const command: Command = {
             teachers.sort((a, b) => a.lastname.localeCompare(b.lastname));
 
             let index = 0;
+            // Cache des photos pour cette navigation : un même prof consulté
+            // plusieurs fois n'est téléchargé qu'une seule fois.
+            const photoCache = new Map<string, Buffer | null>();
 
             const showTeacher = async (i: number) => {
                 const t = teachers[i];
@@ -47,22 +52,11 @@ const command: Command = {
                     )
                     .setFooter({ text: `ID: ${t.uid || 'N/A'}` });
 
-                // Téléchargement de l'image (public d'abord, puis avec le token)
                 if (photoUrl) {
-                    try {
-                        let response = await fetch(photoUrl);
-                        if (!response.ok) {
-                            response = await fetch(photoUrl, {
-                                headers: { Authorization: `${token.token_type} ${token.access_token}` },
-                            });
-                        }
-                        if (response.ok) {
-                            const buffer = Buffer.from(await response.arrayBuffer());
-                            files = [new AttachmentBuilder(buffer, { name: 'teacher.jpg' })];
-                            embed.setImage('attachment://teacher.jpg');
-                        }
-                    } catch (err) {
-                        console.error('Erreur image prof:', err);
+                    const buffer = await fetchPhotoBuffer(photoUrl, token, photoCache);
+                    if (buffer) {
+                        files = [new AttachmentBuilder(buffer, { name: 'teacher.jpg' })];
+                        embed.setImage('attachment://teacher.jpg');
                     }
                 }
 
@@ -71,7 +65,7 @@ const command: Command = {
                     new ButtonBuilder().setCustomId('next_t').setLabel('➡️').setStyle(ButtonStyle.Primary).setDisabled(i === teachers.length - 1)
                 );
 
-                return { embeds: [embed], components: [buttons], files };
+                return { embeds: [embed], components: [buttons, shareRow()], files };
             };
 
             const payload = await showTeacher(index);
@@ -81,6 +75,7 @@ const command: Command = {
 
             collector.on('collect', async (i) => {
                 if (i.user.id !== interaction.user.id) return i.reply({ content: 'Pas touche !', flags: MessageFlags.Ephemeral });
+                if (i.customId === SHARE_ID) return; // traité par le routeur global
                 await i.deferUpdate();
 
                 if (i.customId === 'prev_t') index--;
