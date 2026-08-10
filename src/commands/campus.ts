@@ -1,6 +1,7 @@
 import { ChatInputCommandInteraction, EmbedBuilder, MessageFlags, SlashCommandBuilder } from 'discord.js';
 import { Command } from '../core/command';
 import { sessions } from '../core/store';
+import { shareRow } from '../utils/share';
 
 const command: Command = {
     data: new SlashCommandBuilder()
@@ -28,7 +29,7 @@ const command: Command = {
             .setFooter({ text: 'Gardez ces codes pour vous ! 🤫' })
             .setTimestamp();
 
-        await interaction.editReply({ embeds: [embed] });
+        await interaction.editReply({ embeds: [embed], components: [shareRow()] });
     },
 };
 

@@ -3,6 +3,7 @@ import { Command } from '../core/command';
 import { TimetableService } from '../myges/services/timetable';
 import { sessions } from '../core/store';
 import { formatCampus, formatToFrenchTime } from '../utils/format';
+import { shareRow } from '../utils/share';
 
 const command: Command = {
     data: new SlashCommandBuilder()
@@ -56,7 +57,7 @@ const command: Command = {
                 )
                 .setFooter({ text: `Fin du cours à ${formatToFrenchTime(dateFin)}` });
 
-            await interaction.editReply({ embeds: [embed] });
+            await interaction.editReply({ embeds: [embed], components: [shareRow()] });
         } catch (e) {
             console.error(e);
             interaction.editReply('❌ Erreur lors de la récupération.');

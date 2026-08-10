@@ -3,6 +3,7 @@ import { Command } from '../core/command';
 import { ProfileService } from '../myges/services/profile';
 import { getCurrentYear } from '../config';
 import { sessions } from '../core/store';
+import { shareRow } from '../utils/share';
 
 const command: Command = {
     data: new SlashCommandBuilder()
@@ -17,7 +18,7 @@ const command: Command = {
         const embed = new EmbedBuilder().setTitle(`🚫 Absences (${abs.length})`).setColor(0xff0000);
         if (!abs.length) embed.setDescription('Aucune absence !');
         else abs.slice(0, 10).forEach((a: any) => embed.addFields({ name: a.course_name, value: `📅 ${new Date(a.date).toLocaleDateString()} - ${a.justified ? '✅' : '❌ INJUSTIFIÉE'}` }));
-        await interaction.editReply({ embeds: [embed] });
+        await interaction.editReply({ embeds: [embed], components: [shareRow()] });
     },
 };
 

@@ -1,6 +1,7 @@
 import { ChatInputCommandInteraction, EmbedBuilder, MessageFlags, SlashCommandBuilder } from 'discord.js';
 import { Command } from '../core/command';
 import { loadData, saveData, sessions } from '../core/store';
+import { log } from '../utils/logger';
 
 const command: Command = {
     data: new SlashCommandBuilder()
@@ -21,9 +22,20 @@ const command: Command = {
 
         // 3. On supprime du disque (Fichier JSON)
         const data = loadData();
-        if (data.users[interaction.user.id]) {
-            delete data.users[interaction.user.id];
-            saveData(data); // Sauvegarde immédiate
+        delete data.users[interaction.user.id];
+
+        // 4. On retire ce compte de toute config où il servait de référence :
+        // se déconnecter doit couper net l'usage de ses données.
+        let removedRefs = 0;
+        for (const cfg of Object.values(data.guilds)) {
+            if (cfg.referenceUserId === interaction.user.id) {
+                delete cfg.referenceUserId;
+                removedRefs++;
+            }
+        }
+        saveData(data); // Sauvegarde immédiate
+        if (removedRefs > 0) {
+            log('AUTH', `${interaction.user.id} déconnecté : retiré comme compte de référence sur ${removedRefs} serveur(s).`);
         }
 
         // 4. Message de confirmation rassurant

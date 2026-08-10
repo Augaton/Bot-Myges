@@ -1,36 +1,9 @@
 // Rendu graphique de l'emploi du temps en PNG (grille calendaire).
-// Utilise @napi-rs/canvas : binaires précompilés, aucun build natif requis.
-import { createCanvas, GlobalFonts, SKRSContext2D } from '@napi-rs/canvas';
-import * as path from 'path';
-
-// --- POLICES EMBARQUÉES ---
-// On enregistre DejaVu Sans (bundlée dans le repo) pour un rendu identique
-// quel que soit le serveur, même sans polices système installées.
-const FONT_DIR = path.join(__dirname, '..', '..', 'assets', 'fonts');
-let fontsReady = false;
-function ensureFonts() {
-    if (fontsReady) return;
-    try {
-        GlobalFonts.registerFromPath(path.join(FONT_DIR, 'DejaVuSans.ttf'), 'AgendaSans');
-        GlobalFonts.registerFromPath(path.join(FONT_DIR, 'DejaVuSans-Bold.ttf'), 'AgendaSansBold');
-    } catch (e) {
-        console.error('⚠️ Polices agenda non chargées, fallback système:', e);
-    }
-    fontsReady = true;
-}
-const FONT = 'AgendaSans';
-const FONT_BOLD = 'AgendaSansBold';
-
-// --- THÈME (aligné sur le dark mode Discord) ---
-const COL = {
-    bg: '#1e1f22',
-    panel: '#2b2d31',
-    grid: '#3a3c41',
-    text: '#ffffff',
-    muted: '#b5bac1',
-    faint: '#80848e',
-    now: '#f23f43',
-};
+// Polices, palette et helpers de dessin sont mutualisés dans canvasBase.
+import { createCanvas, SKRSContext2D } from '@napi-rs/canvas';
+import {
+    COL, ensureFonts, fitText, FONT, FONT_BOLD, hexToRgba, measureContext, roundRect, wrapAt,
+} from './canvasBase';
 
 // --- COULEURS PAR CAMPUS ---
 const CAMPUS_COLORS: Record<string, string> = {
@@ -66,11 +39,6 @@ function cleanName(raw: string): string {
     return (raw || 'Cours').replace(/^T\d+\s-\s/i, '').trim();
 }
 
-function hexToRgba(hex: string, a: number): string {
-    const n = parseInt(hex.slice(1), 16);
-    return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
-}
-
 function fmtHM(d: Date): string {
     return d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Paris' });
 }
@@ -99,77 +67,6 @@ function campusKey(raw: string, distanciel: boolean): string {
     if (s.includes('erard')) return 'Erard';
     if (s.includes('rauch')) return 'Rauch';
     return raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
-}
-
-// Rectangle arrondi
-function roundRect(ctx: SKRSContext2D, x: number, y: number, w: number, h: number, r: number) {
-    const rad = Math.max(0, Math.min(r, w / 2, h / 2));
-    ctx.beginPath();
-    ctx.moveTo(x + rad, y);
-    ctx.arcTo(x + w, y, x + w, y + h, rad);
-    ctx.arcTo(x + w, y + h, x, y + h, rad);
-    ctx.arcTo(x, y + h, x, y, rad);
-    ctx.arcTo(x, y, x + w, y, rad);
-    ctx.closePath();
-}
-
-// Découpe un texte pour une largeur donnée à la police courante (déjà settée).
-function wrapAt(ctx: SKRSContext2D, text: string, maxW: number): string[] {
-    const words = text.split(/\s+/).filter(Boolean);
-    const lines: string[] = [];
-    let line = '';
-    const pushBroken = (chunk: string) => {
-        // Coupe un mot plus large que la colonne.
-        let cur = chunk;
-        while (ctx.measureText(cur).width > maxW && cur.length > 1) {
-            let cut = cur.length - 1;
-            while (cut > 1 && ctx.measureText(cur.slice(0, cut)).width > maxW) cut--;
-            lines.push(cur.slice(0, cut));
-            cur = cur.slice(cut);
-        }
-        line = cur;
-    };
-    for (const w of words) {
-        const test = line ? `${line} ${w}` : w;
-        if (ctx.measureText(test).width > maxW && line) {
-            lines.push(line);
-            if (ctx.measureText(w).width > maxW) pushBroken(w);
-            else line = w;
-        } else if (ctx.measureText(test).width > maxW) {
-            pushBroken(w);
-        } else {
-            line = test;
-        }
-    }
-    if (line) lines.push(line);
-    return lines;
-}
-
-// Choisit la plus grande taille de police (entre min et max) pour que `text`
-// tienne entièrement dans (maxW x maxH). Ellipse en dernier recours.
-function fitText(
-    ctx: SKRSContext2D, text: string, maxW: number, maxH: number,
-    family: string, max: number, min: number
-): { lines: string[]; size: number; lineH: number } {
-    for (let size = max; size >= min; size--) {
-        ctx.font = `${size}px ${family}`;
-        const lineH = size + 3;
-        const lines = wrapAt(ctx, text, maxW);
-        if (lines.length * lineH <= maxH) return { lines, size, lineH };
-    }
-    // Taille mini : on tronque au nombre de lignes possible.
-    const size = min;
-    const lineH = size + 3;
-    ctx.font = `${size}px ${family}`;
-    let lines = wrapAt(ctx, text, maxW);
-    const maxLines = Math.max(1, Math.floor(maxH / lineH));
-    if (lines.length > maxLines) {
-        lines = lines.slice(0, maxLines);
-        let last = lines[maxLines - 1];
-        while (ctx.measureText(last + '…').width > maxW && last.length > 1) last = last.slice(0, -1);
-        lines[maxLines - 1] = last + '…';
-    }
-    return { lines, size, lineH };
 }
 
 // Normalise un item d'agenda MyGes vers notre structure interne.
@@ -277,7 +174,7 @@ function renderGrid(title: string, subtitle: string, dayDates: Date[], rawCourse
     const headerTop = PAD + 66; // titre + sous-titre
     const legendRowH = 24;
     // On mesure combien d'items tiennent par ligne
-    const tmp = createCanvas(10, 10).getContext('2d');
+    const tmp = measureContext();
     tmp.font = `13px ${FONT}`;
     const itemW = (label: string) => 18 + tmp.measureText(label).width + 18;
     let legendRows = legendItems.length ? 1 : 0;

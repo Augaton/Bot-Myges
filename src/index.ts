@@ -7,6 +7,7 @@ import { autoLoginUsers } from './tasks/autoLogin';
 import { checkNewProjects } from './tasks/projects';
 import { announceUpdateIfNeeded } from './tasks/announceUpdate';
 import { log, logError } from './utils/logger';
+import { handleShare, SHARE_ID } from './utils/share';
 
 dotenv.config();
 
@@ -54,6 +55,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
         } catch (e) {
             logError('CMD', `Erreur /${interaction.commandName} (${who}) :`, e);
         }
+        return;
+    }
+
+    // Bouton « partager » : routé ici pour fonctionner sur toutes les commandes,
+    // y compris celles qui n'ouvrent pas de collecteur.
+    if (interaction.isButton() && interaction.customId === SHARE_ID) {
+        await handleShare(interaction);
         return;
     }
 
