@@ -2,6 +2,8 @@ import { ChatInputCommandInteraction, EmbedBuilder, MessageFlags, SlashCommandBu
 import { Command } from '../core/command';
 import { ProfileService } from '../myges/services/profile';
 import { sessions } from '../core/store';
+import { fullName } from '../utils/format';
+import { logError } from '../utils/logger';
 import { shareRow } from '../utils/share';
 
 const command: Command = {
@@ -15,18 +17,21 @@ const command: Command = {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         try {
             const p = await ProfileService.getProfile(token);
+            // `p.name` porte le nom de famille côté MyGes : on réutilise le
+            // helper commun, qui garantit une valeur non vide (Discord refuse
+            // un champ d'embed vide et rejette alors toute la réponse).
             const embed = new EmbedBuilder()
-                .setTitle(`👤 ${p.firstname} ${p.name}`)
+                .setTitle(`👤 ${fullName({ firstname: p?.firstname, lastname: p?.name })}`)
                 .setColor(0x5865f2)
-                .setThumbnail(p._links?.photo?.href || null)
+                .setThumbnail(p?._links?.photo?.href || null)
                 .addFields(
-                    { name: 'Email', value: p.email },
-                    { name: 'Classe', value: p.classes?.map((c: any) => c.name).join(', ') || '?' }
+                    { name: 'Email', value: p?.email || 'Non renseigné' },
+                    { name: 'Classe', value: p?.classes?.map((c: any) => c.name).filter(Boolean).join(', ') || '?' }
                 );
             await interaction.editReply({ embeds: [embed], components: [shareRow()] });
         } catch (e) {
-            console.error(e);
-            await interaction.editReply('❌ Erreur.');
+            logError('PROFIL', 'Récupération du profil impossible :', e);
+            await interaction.editReply('❌ Erreur lors de la récupération du profil.');
         }
     },
 };

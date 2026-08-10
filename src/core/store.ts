@@ -31,7 +31,16 @@ export interface SavedData {
 // Sessions actives (token MyGes en mémoire vive), indexées par ID Discord.
 export const sessions = new Map<string, any>();
 
-export function loadData(): SavedData {
+// --- SOURCE DE VÉRITÉ UNIQUE ---
+// Le fichier n'est lu qu'une fois : ensuite, tout le monde manipule le MÊME
+// objet en mémoire. Deux bénéfices :
+//  • plus de lecture + parse synchrones (donc bloquants) à chaque interaction ;
+//  • plus de mises à jour perdues. Avant, deux flux concurrents chargeaient
+//    chacun leur copie et la dernière écriture écrasait l'autre : un /login
+//    pendant un cycle d'alertes projets pouvait effacer les identifiants.
+let cache: SavedData | null = null;
+
+function readFromDisk(): SavedData {
     if (!fs.existsSync(DB_FILE)) return { users: {}, guilds: {} };
     // On laisse remonter une erreur de parsing (fichier corrompu) plutôt que de
     // renvoyer un objet vide qui écraserait ensuite toutes les données.
@@ -39,6 +48,15 @@ export function loadData(): SavedData {
     if (!parsed.users) parsed.users = {};
     if (!parsed.guilds) parsed.guilds = {};
     return parsed;
+}
+
+/**
+ * Renvoie l'état partagé. L'objet est mutable : le modifier puis appeler
+ * `saveData()` suffit à persister. Ne jamais en conserver une copie figée.
+ */
+export function loadData(): SavedData {
+    if (!cache) cache = readFromDisk();
+    return cache;
 }
 
 /**
@@ -52,15 +70,30 @@ export function getGuildConfig(data: SavedData, guildId: string): GuildConfig {
     return cfg;
 }
 
-export function saveData(data: SavedData) {
+/**
+ * Persiste l'état partagé. L'argument est optionnel (et ignoré s'il s'agit déjà
+ * du cache) : il n'est là que pour rester compatible avec les appels existants.
+ */
+export function saveData(data: SavedData = loadData()) {
+    // Un appelant qui aurait construit son propre objet remplace l'état courant.
+    if (data !== cache) cache = data;
+
     // Écriture atomique (fichier temporaire + renommage) pour ne jamais laisser
     // un saved_data.json à moitié écrit, et log explicite en cas d'échec d'écriture.
+    // Mode 0600 : le fichier contient des identifiants chiffrés, il ne doit pas
+    // être lisible par les autres comptes de la machine.
+    const tmp = `${DB_FILE}.tmp`;
     try {
-        const tmp = `${DB_FILE}.tmp`;
-        fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+        fs.writeFileSync(tmp, JSON.stringify(data, null, 2), { mode: 0o600 });
         fs.renameSync(tmp, DB_FILE);
+        fs.chmodSync(DB_FILE, 0o600); // le renommage conserve les droits d'un fichier préexistant
     } catch (e) {
         console.error(`❌ Échec d'écriture de ${DB_FILE} (permissions ? disque plein ?) :`, e);
+        try {
+            fs.unlinkSync(tmp);
+        } catch {
+            /* pas de temporaire à nettoyer */
+        }
     }
 }
 

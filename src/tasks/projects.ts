@@ -5,6 +5,28 @@ import { getGuildConfig, loadData, saveData, sessions } from '../core/store';
 import { getNextStep } from '../utils/format';
 import { log, logError } from '../utils/logger';
 
+// Garde-fou anti-chevauchement, partagé par TOUS les appelants (tâche horaire
+// et déclenchement après un /login). Deux passes concurrentes liraient chacune
+// saved_data.json puis le réécriraient : la dernière écrasant la première, des
+// identifiants ou des projets déjà annoncés seraient perdus.
+let running = false;
+
+/** Point d'entrée à utiliser partout : n'exécute jamais deux cycles en parallèle. */
+export async function runProjectCheck(client: Client) {
+    if (running) {
+        log('PROJET', 'Cycle précédent encore en cours, vérification ignorée.');
+        return;
+    }
+    running = true;
+    try {
+        await checkNewProjects(client);
+    } catch (e) {
+        logError('PROJET', 'Cycle de vérification en échec :', e);
+    } finally {
+        running = false;
+    }
+}
+
 // --- ALERTE PROJETS ---
 // Pour chaque serveur configuré, on annonce les nouveaux projets du compte de
 // référence dans son salon d'alertes. Les serveurs partageant le même compte de
@@ -45,7 +67,7 @@ export async function checkNewProjects(client: Client) {
         const token = sessions.get(userId);
         let projects: any[];
         try {
-            projects = await ProjectService.getProjects(token, getCurrentYear());
+            projects = (await ProjectService.getProjects(token, getCurrentYear())) || [];
         } catch (e) {
             logError('PROJET', `Compte ${userId} : récupération des projets impossible :`, e);
             continue;
@@ -74,7 +96,7 @@ export async function checkNewProjects(client: Client) {
                     .setDescription(`Nouveau projet en **${p.course_name}**`)
                     .setColor(0xff0000)
                     .addFields(
-                        { name: 'Nom', value: p.name, inline: true },
+                        { name: 'Nom', value: String(p.name || 'Sans titre').slice(0, 1024), inline: true },
                         { name: `📅 ${typeStep}`, value: dateStr, inline: true },
                         { name: 'Objectif', value: p.project_teaching_goals ? p.project_teaching_goals.substring(0, 500) : 'Voir MyGes' }
                     )

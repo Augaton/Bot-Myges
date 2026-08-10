@@ -3,6 +3,7 @@ import { Command } from '../core/command';
 import { TimetableService } from '../myges/services/timetable';
 import { sessions } from '../core/store';
 import { formatCampus, formatToFrenchTime } from '../utils/format';
+import { logError } from '../utils/logger';
 import { shareRow } from '../utils/share';
 
 const command: Command = {
@@ -19,7 +20,7 @@ const command: Command = {
             const start = new Date();
             const end = new Date();
             end.setDate(end.getDate() + 7);
-            const cours = await TimetableService.getTimetable(token, start, end);
+            const cours = (await TimetableService.getTimetable(token, start, end)) || [];
             const now = Date.now();
             const futurs = cours.filter((c: any) => new Date(c.start_date).getTime() > now);
 
@@ -30,7 +31,7 @@ const command: Command = {
             const c = futurs[0];
             const dateDebut = new Date(c.start_date);
             const dateFin = new Date(c.end_date);
-            const nomCours = c.name.replace(/^T\d+\s-\s/i, '');
+            const nomCours = String(c.name || 'Cours').replace(/^T\d+\s-\s/i, '');
 
             let salle = 'Non défini';
             let icon = '🏫';
@@ -59,8 +60,8 @@ const command: Command = {
 
             await interaction.editReply({ embeds: [embed], components: [shareRow()] });
         } catch (e) {
-            console.error(e);
-            interaction.editReply('❌ Erreur lors de la récupération.');
+            logError('PROCHAIN', 'Récupération du prochain cours impossible :', e);
+            await interaction.editReply('❌ Erreur lors de la récupération.');
         }
     },
 };

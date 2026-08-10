@@ -9,9 +9,9 @@ import { sessions } from '../core/store';
 import { log, logError } from '../utils/logger';
 import { shareRow, SHARE_ID } from '../utils/share';
 import {
-    generalAverage, renderNotesOverview, renderSubjectCard, shortAverage, Subject, subjectColor,
-    subjectEmoji, toSubject,
+    generalAverage, shortAverage, Subject, subjectColor, subjectEmoji, toSubject,
 } from '../utils/notesImage';
+import { renderNotesOverviewAsync, renderSubjectCardAsync } from '../utils/renderPool';
 
 // Discord limite un menu déroulant à 25 options.
 const MENU_MAX = 25;
@@ -41,6 +41,14 @@ const command: Command = {
             .sort((a, b) => a.localeCompare(b, 'fr', { numeric: true }));
         if (!semesters.length) return interaction.editReply('Aucun trimestre disponible.');
 
+        // Moyennes par trimestre calculées UNE fois. Elles alimentent le menu
+        // déroulant, reconstruit à chaque rafraîchissement de la vue : les
+        // recalculer là re-parcourait toutes les notes de toutes les matières
+        // à chaque clic.
+        const averageBySemester = new Map<string, number | null>(
+            semesters.map((s) => [s, generalAverage(grades.filter((g: any) => g.trimester_name === s).map(toSubject))])
+        );
+
         // --- ÉTAT DE NAVIGATION ---
         let semester = semesters[semesters.length - 1]; // le plus récent par défaut
         let subjects: Subject[] = [];
@@ -68,7 +76,7 @@ const command: Command = {
                 .setPlaceholder('📅 Trimestre')
                 .addOptions(
                     semesters.slice(0, MENU_MAX).map((s) => {
-                        const avg = generalAverage(grades.filter((g: any) => g.trimester_name === s).map(toSubject));
+                        const avg = averageBySemester.get(s) ?? null;
                         return {
                             label: s.slice(0, 100),
                             value: s.slice(0, 100),
@@ -108,14 +116,12 @@ const command: Command = {
 
         // --- RENDU ---
         const buildView = async () => {
-            // Le rendu canvas est synchrone et bloque l'event-loop : on cède la
-            // main d'abord pour que les interactions en attente soient acquittées.
-            await new Promise((r) => setImmediate(r));
-
+            // Le rendu canvas part sur un thread dédié : l'event-loop reste
+            // disponible pour accuser réception des autres interactions.
             const detail = view === 'detail' && subjects[index];
             const buffer = detail
-                ? renderSubjectCard(subjects[index], semester, index, subjects.length)
-                : renderNotesOverview(subjects, semester, highlight);
+                ? await renderSubjectCardAsync(subjects[index], semester, index, subjects.length)
+                : await renderNotesOverviewAsync(subjects, semester, highlight);
 
             const gen = generalAverage(subjects);
             const embed = new EmbedBuilder()

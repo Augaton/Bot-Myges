@@ -42,10 +42,13 @@ export async function fetchPhotoBuffer(
 
     try {
         // On tente d'abord sans authentification, puis avec le token si besoin.
-        let response = await fetch(photoUrl);
+        // Délai maximal : une photo qui ne vient pas ne doit pas bloquer la
+        // navigation dans le trombinoscope.
+        let response = await fetch(photoUrl, { signal: AbortSignal.timeout(10_000) });
         if (!response.ok) {
             response = await fetch(photoUrl, {
                 headers: { Authorization: `${token.token_type} ${token.access_token}` },
+                signal: AbortSignal.timeout(10_000),
             });
         }
         if (response.ok) buffer = Buffer.from(await response.arrayBuffer());

@@ -7,6 +7,8 @@ import { SchoolService } from '../myges/services/school';
 import { getCurrentYear } from '../config';
 import { sessions } from '../core/store';
 import { fetchPhotoBuffer } from '../utils/photo';
+import { byLastName, fullName } from '../utils/format';
+import { logError } from '../utils/logger';
 import { shareRow, SHARE_ID } from '../utils/share';
 
 const command: Command = {
@@ -31,8 +33,8 @@ const command: Command = {
             const students: any[] = await SchoolService.getClassmates(token, classId);
             if (!students || students.length === 0) return interaction.editReply('❌ Aucun élève trouvé.');
 
-            // Tri alphabétique
-            students.sort((a, b) => a.lastname.localeCompare(b.lastname));
+            // Tri alphabétique (tolérant aux noms manquants)
+            students.sort(byLastName);
 
             let index = 0;
             // Cache des photos pour cette navigation : un même élève consulté
@@ -55,7 +57,7 @@ const command: Command = {
                     .setDescription(`Étudiant ${i + 1}/${students.length}`)
                     .setColor(0x0099ff)
                     .addFields(
-                        { name: 'Nom', value: `**${s.firstname} ${s.lastname}**`, inline: true },
+                        { name: 'Nom', value: `**${fullName(s)}**`, inline: true },
                         { name: 'Email', value: s.email || 'Non renseigné', inline: true }
                     )
                     .setFooter({ text: `ID: ${s.uid || 'N/A'}` });
@@ -92,11 +94,15 @@ const command: Command = {
                 if (index < 0) index = 0;
                 if (index >= students.length) index = students.length - 1;
 
-                await interaction.editReply(await showStudent(index));
+                try {
+                    await interaction.editReply(await showStudent(index));
+                } catch (e) {
+                    logError('TROMBI', 'Mise à jour de la fiche impossible :', e);
+                }
             });
         } catch (e) {
-            console.error(e);
-            interaction.editReply('❌ Erreur technique.');
+            logError('TROMBI', 'Récupération du trombinoscope impossible :', e);
+            await interaction.editReply('❌ Erreur technique.');
         }
     },
 };

@@ -5,6 +5,11 @@ export interface RequestConfig {
   body?: any;
 }
 
+// `fetch` n'a aucun délai maximal par défaut : une API MyGes qui accepte la
+// connexion sans jamais répondre bloquerait la commande indéfiniment (et, pour
+// les tâches de fond, le cycle entier). 20 s laissent large sans jamais figer.
+const REQUEST_TIMEOUT_MS = 20_000;
+
 export abstract class BaseService {
   static async request<T = any>(
     credentials: GesAuthenticationToken,
@@ -22,6 +27,7 @@ export abstract class BaseService {
         Authorization: `${credentials.token_type} ${credentials.access_token}`,
       },
       body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
 
     if (!response.ok) {

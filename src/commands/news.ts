@@ -3,6 +3,7 @@ import { Command } from '../core/command';
 import { SchoolService } from '../myges/services/school';
 import { sessions } from '../core/store';
 import { snippet } from '../utils/format';
+import { logError } from '../utils/logger';
 import { shareRow } from '../utils/share';
 
 const command: Command = {
@@ -17,10 +18,13 @@ const command: Command = {
 
         try {
             const newsData: any = await SchoolService.getNews(token);
-            // L'API renvoie souvent une pagination { content: [...] }
-            const newsList: any[] = newsData.content || newsData;
+            // L'API renvoie souvent une pagination { content: [...] }, parfois
+            // directement un tableau, parfois null.
+            const newsList: any[] = newsData?.content || newsData || [];
 
-            if (!newsList || newsList.length === 0) return interaction.editReply('Aucune actualité.');
+            if (!Array.isArray(newsList) || newsList.length === 0) {
+                return interaction.editReply('Aucune actualité.');
+            }
 
             const embed = new EmbedBuilder()
                 .setTitle("📰 Actualités de l'école")
@@ -46,8 +50,8 @@ const command: Command = {
 
             await interaction.editReply({ embeds: [embed], components: [shareRow()] });
         } catch (e) {
-            console.error(e);
-            interaction.editReply('❌ Erreur news.');
+            logError('NEWS', 'Récupération des actualités impossible :', e);
+            await interaction.editReply('❌ Erreur lors de la récupération des actualités.');
         }
     },
 };

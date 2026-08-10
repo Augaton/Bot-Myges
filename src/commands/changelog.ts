@@ -9,18 +9,57 @@ import { shareRow } from '../utils/share';
  */
 export function buildChangelogEmbed(client: Client): EmbedBuilder {
     return new EmbedBuilder()
-        .setTitle(`🚀 Mise à jour ${BOT_VERSION} - "Multi-serveurs"`)
-        .setDescription("Version majeure : **un seul bot pour toutes les promos**. Chaque serveur a désormais sa propre configuration, réglable directement depuis Discord.")
+        .setTitle(`🚀 Mise à jour ${BOT_VERSION} - "Plus rapide, plus solide"`)
+        .setDescription("Pas de nouvelle commande cette fois : cette version s'attaque à **tout ce qui coinçait**. Le bot répond plus vite, ne reste plus bloqué sur « réfléchit… », et ne s'arrête plus tout seul.")
         .setColor(0x5865f2)
         .setThumbnail(client.user?.displayAvatarURL() || null)
         .addFields(
-            { name: '🏫 Un bot, plusieurs serveurs', value: '• Fini un bot par promo : le même bot gère **plusieurs serveurs**, chacun avec **sa propre configuration** (salons, compte de référence, alertes).\n• Les projets annoncés sont **cloisonnés par serveur** : aucun mélange entre promos.' },
-            { name: '⚙️ Configuration en jeu : `/config`', value: '• Un **panneau interactif** pour tout régler : sélection des salons et du compte de référence **en quelques clics**.\n• Plus besoin de toucher au code ou de redémarrer le bot.\n• **Réservé aux administrateurs** : la commande est invisible et inaccessible aux autres.' },
-            { name: '👤 Compte MyGes de référence', value: '• Chaque serveur choisit **quel compte** alimente ses alertes projets.\n• 🔐 **Ton compte et lui seul** : un administrateur ne peut **pas** désigner le compte de quelqu\'un d\'autre, tes données ne peuvent donc pas être publiées sans ton accord.\n• `/logout` te retire automatiquement comme référence **sur tous les serveurs**.' },
-            { name: '🔒 Sécurité', value: '• Ton **token MyGes** n\'est plus jamais transmis à un serveur autre que MyGes (vérification stricte du domaine).\n• Identifiants toujours chiffrés (**AES-256-GCM**) et **reconnexion automatique** si la session expire.' },
-            { name: '⚡ Performances', value: '• `/trombi` et `/profs` : les photos sont **mises en cache** — navigation bien plus fluide, fini le retéléchargement à chaque clic.\n• Les serveurs partageant un même compte de référence ne déclenchent plus qu\'**une seule requête** au lieu d\'une par serveur.' },
-            { name: '🛠️ Fiabilité', value: '• Les nouveaux projets sont **enregistrés immédiatement** : plus d\'alertes en double.\n• Sauvegarde plus sûre (écriture atomique) et **logs serveur détaillés**.' },
-            { name: '⚠️ Action requise', value: '• Un **administrateur** doit lancer **`/config`** sur chaque serveur pour (ré)activer les alertes projets et les annonces de mise à jour.' }
+            {
+                name: '⚡ `/agenda` et `/notes` nettement plus rapides',
+                value:
+                    "• Naviguer entre les semaines ne relance plus une requête MyGes **à chaque clic** : l'emploi du temps que tu viens de consulter reste en mémoire une minute.\n" +
+                    '• Les images (agenda, graphiques de notes) sont désormais dessinées **en parallèle**, sur des threads dédiés.\n' +
+                    '• Résultat : même quand plusieurs personnes utilisent le bot en même temps, les commandes ne se marchent plus dessus.',
+            },
+            {
+                name: '🩹 Fini les commandes bloquées sur « réfléchit… »',
+                value:
+                    "• Quand une commande échouait, elle restait **indéfiniment** en attente. Elle affiche maintenant un vrai message d'erreur.\n" +
+                    '• `/absences` pouvait tomber en panne silencieuse : corrigé.\n' +
+                    '• Si MyGes ne répond plus, la commande **abandonne proprement** au lieu de patienter sans fin.',
+            },
+            {
+                name: "🛡️ Le bot ne s'arrête plus tout seul",
+                value:
+                    '• Une simple erreur réseau au mauvais moment pouvait **couper le bot net**. Il encaisse désormais et continue de tourner.\n' +
+                    '• Après un redémarrage, les commandes sont **utilisables immédiatement**, sans attendre la reconnexion de tous les comptes.\n' +
+                    '• Arrêts et redémarrages propres côté serveur : plus de statut « en ligne » fantôme.',
+            },
+            {
+                name: '🔐 Tes identifiants mieux protégés',
+                value:
+                    "• Un bug de concurrence pouvait **effacer des identifiants enregistrés** lorsqu'une connexion tombait pendant une vérification des projets : on se retrouvait déconnecté sans raison. Corrigé.\n" +
+                    '• Le fichier de sauvegarde est maintenant **lisible par le bot seul** sur le serveur.\n' +
+                    '• Pour rappel : identifiants chiffrés en **AES-256-GCM**, token jamais transmis ailleurs qu\'à MyGes.',
+            },
+            {
+                name: '🧩 Fiches incomplètes enfin tolérées',
+                value:
+                    '• `/profs`, `/trombi` et `/profil` ne plantent plus quand MyGes renvoie une fiche **sans nom, sans email ou sans photo** : la donnée manquante est simplement signalée.\n' +
+                    "• Idem pour `/news`, `/prochain` et `/projets` lorsque l'école renvoie une réponse vide.",
+            },
+            {
+                name: '🛠️ Sous le capot',
+                value:
+                    '• Blocage du bot pendant le dessin des images : **960 ms → 3 ms** sur 8 rendus simultanés.\n' +
+                    '• Le fichier de données n\'est plus relu et réanalysé à chaque interaction.\n' +
+                    '• Toutes les dépendances à jour : **0 faille connue** (5 auparavant, dont 3 critiques).\n' +
+                    '• Le bot est prêt pour **Node.js 26**.',
+            },
+            {
+                name: '✅ Aucune action requise',
+                value: '• Rien à reconfigurer : `/config`, tes salons et ton compte de référence sont conservés tels quels.',
+            }
         )
         .setFooter({ text: "Merci d'utiliser MyGes Bot ! 🎓" })
         .setTimestamp();

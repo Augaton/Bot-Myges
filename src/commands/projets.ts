@@ -4,6 +4,7 @@ import { ProjectService } from '../myges/services/project';
 import { getCurrentYear } from '../config';
 import { sessions } from '../core/store';
 import { getNextStep, snippet } from '../utils/format';
+import { logError } from '../utils/logger';
 import { shareRow } from '../utils/share';
 
 const command: Command = {
@@ -17,7 +18,7 @@ const command: Command = {
         if (!token) return interaction.editReply('❌ Connecte-toi.');
 
         try {
-            const projects = await ProjectService.getProjects(token, getCurrentYear());
+            const projects = (await ProjectService.getProjects(token, getCurrentYear())) || [];
             const now = Date.now();
 
             // On ne garde que les projets ayant une étape future
@@ -58,13 +59,14 @@ const command: Command = {
                 const desc = snippet(p.project_teaching_goals);
                 if (desc) lines.push(`> ${desc}`);
 
-                embed.addFields({ name: `${urgent} ${p.name}`, value: lines.join('\n') });
+                // Discord plafonne le nom d'un champ à 256 caractères.
+                embed.addFields({ name: `${urgent} ${p.name || 'Projet'}`.slice(0, 256), value: lines.join('\n') });
             }
 
             await interaction.editReply({ embeds: [embed], components: [shareRow()] });
         } catch (e) {
-            console.error(e);
-            await interaction.editReply('❌ Erreur projets.');
+            logError('PROJETS', 'Récupération des projets impossible :', e);
+            await interaction.editReply('❌ Erreur lors de la récupération des projets.');
         }
     },
 };

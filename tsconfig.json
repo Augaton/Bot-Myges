@@ -1,15 +1,22 @@
 {
   "compilerOptions": {
-    "target": "ES2020",
+    "target": "ES2023",
     "module": "commonjs",
-    "lib": ["ES2020"],
+    "moduleResolution": "node",
+    "lib": ["ES2023"],
+    "types": ["node"],
     "outDir": "./dist",
     "rootDir": "./src",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "sourceMap": true,
+    "removeComments": false,
+    // Interdit la syntaxe TS non effaçable (enum, namespace, parameter properties…).
+    // Garantit que `node src/index.ts` (type stripping natif) reste possible en dev.
+    "erasableSyntaxOnly": true
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules"]
+  "exclude": ["node_modules", "dist"]
 }

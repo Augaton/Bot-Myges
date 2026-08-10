@@ -1,21 +1,46 @@
-import { ActivityType, Client, Events, GatewayIntentBits, REST, Routes } from 'discord.js';
-import * as dotenv from 'dotenv';
-import { BOT_VERSION, CHECK_INTERVAL } from './config';
+import { ActivityType, Client, Events, GatewayIntentBits, MessageFlags, REST, Routes } from 'discord.js';
+import { BOT_VERSION, CHECK_INTERVAL } from './config'; // charge aussi le .env
 import { commands, commandsJSON } from './core/registry';
 import { handleLoginModal, LOGIN_MODAL_ID } from './commands/login';
 import { autoLoginUsers } from './tasks/autoLogin';
-import { checkNewProjects } from './tasks/projects';
+import { runProjectCheck } from './tasks/projects';
 import { announceUpdateIfNeeded } from './tasks/announceUpdate';
 import { log, logError } from './utils/logger';
 import { handleShare, SHARE_ID } from './utils/share';
+import { shutdownRenderPool } from './utils/renderPool';
 
-dotenv.config();
+// --- CONFIGURATION REQUISE ---
+// Sur un serveur, mieux vaut refuser de démarrer avec un message clair que de
+// boucler sur des erreurs de connexion Discord illisibles.
+const TOKEN = process.env.DISCORD_TOKEN;
+if (!TOKEN) {
+    console.error('❌ ERREUR CRITIQUE : DISCORD_TOKEN absent (.env ou variable d\'environnement).');
+    process.exit(1);
+}
+
+// --- FILETS DE SÉCURITÉ PROCESSUS ---
+// Node termine le processus sur une promesse rejetée non gérée : un simple
+// editReply en échec suffirait à tuer le bot. On journalise et on continue.
+process.on('unhandledRejection', (reason) => {
+    logError('PROCESS', 'Promesse rejetée non gérée :', reason);
+});
+process.on('uncaughtException', (err) => {
+    logError('PROCESS', 'Exception non interceptée :', err);
+});
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
+// discord.js émet 'error' sur le client ; sans écouteur, Node relance l'erreur.
+client.on(Events.Error, (e) => logError('DISCORD', 'Erreur client :', e));
+client.on(Events.Warn, (m) => log('DISCORD', `Avertissement : ${m}`));
+
+// Tâche de fond des alertes projets (le garde-fou anti-chevauchement et la
+// capture d'erreurs vivent dans tasks/projects, partagés avec /login).
+let projectTimer: NodeJS.Timeout | null = null;
+
 // --- INIT ---
 client.once(Events.ClientReady, async () => {
-    log('BOOT', `Bot connecté : ${client.user?.tag} (${BOT_VERSION})`);
+    log('BOOT', `Bot connecté : ${client.user?.tag} (${BOT_VERSION}) · Node ${process.version}`);
 
     // 1. Statut (instantané visuellement)
     client.user?.setPresence({
@@ -23,24 +48,29 @@ client.once(Events.ClientReady, async () => {
         activities: [{ name: `MyGes Bot ${BOT_VERSION}`, type: ActivityType.Playing }],
     });
 
-    // 2. Logique lourde : reconnexion des utilisateurs MyGes
-    console.log('🔄 Lancement de la reconnexion MyGes...');
-    await autoLoginUsers();
-
-    // 3. Enregistrement des commandes slash
-    const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN!);
+    // 2. Enregistrement des commandes slash — EN PREMIER.
+    // La reconnexion MyGes est séquentielle (2 s par compte) : la faire avant
+    // laisserait le bot « en ligne » mais sans aucune commande utilisable
+    // pendant plusieurs minutes dès qu'il y a quelques dizaines d'utilisateurs.
+    const rest = new REST({ version: '10' }).setToken(TOKEN!);
     try {
         await rest.put(Routes.applicationCommands(client.user!.id), { body: commandsJSON });
-        console.log('✅ Commandes enregistrées.');
+        log('BOOT', `${commandsJSON.length} commandes enregistrées.`);
     } catch (e) {
-        console.error(e);
+        logError('BOOT', 'Enregistrement des commandes impossible :', e);
     }
 
-    // 4. Annonce de mise à jour si la version a changé
+    // 3. Annonce de mise à jour si la version a changé
     await announceUpdateIfNeeded(client);
 
-    // 5. Tâches de fond
-    setInterval(() => checkNewProjects(client), CHECK_INTERVAL);
+    // 4. Tâches de fond (démarrées avant la reconnexion, qui peut être longue)
+    projectTimer = setInterval(() => runProjectCheck(client), CHECK_INTERVAL);
+
+    // 5. Reconnexion des comptes MyGes, en arrière-plan.
+    // Les commandes répondent déjà « connecte-toi d'abord » tant qu'une session
+    // n'est pas rétablie : inutile de bloquer le démarrage pour ça.
+    log('BOOT', 'Reconnexion MyGes lancée en arrière-plan...');
+    void autoLoginUsers().catch((e) => logError('BOOT', 'Reconnexion MyGes en échec :', e));
 });
 
 // --- ROUTAGE DES INTERACTIONS ---
@@ -54,6 +84,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
             await command.execute(interaction);
         } catch (e) {
             logError('CMD', `Erreur /${interaction.commandName} (${who}) :`, e);
+            // Sans cela, Discord laisse la commande sur « réfléchit… » indéfiniment.
+            const oops = '❌ Une erreur est survenue. Réessaie dans un instant.';
+            try {
+                if (interaction.deferred || interaction.replied) await interaction.editReply(oops);
+                else await interaction.reply({ content: oops, flags: MessageFlags.Ephemeral });
+            } catch {
+                /* interaction expirée : rien de plus à faire */
+            }
         }
         return;
     }
@@ -73,4 +111,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 });
 
-client.login(process.env.DISCORD_TOKEN);
+// --- ARRÊT PROPRE ---
+// systemd/Docker envoient SIGTERM : on ferme la passerelle Discord au lieu de
+// laisser la connexion mourir, ce qui évite un statut « en ligne » fantôme.
+let shuttingDown = false;
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+    process.on(signal, () => {
+        if (shuttingDown) return;
+        shuttingDown = true;
+        log('SHUTDOWN', `${signal} reçu, arrêt en cours...`);
+        if (projectTimer) clearInterval(projectTimer);
+        Promise.allSettled([client.destroy(), shutdownRenderPool()])
+            .catch((e) => logError('SHUTDOWN', 'Fermeture imparfaite :', e))
+            .finally(() => process.exit(0));
+    });
+}
+
+client.login(TOKEN);

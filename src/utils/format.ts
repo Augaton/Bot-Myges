@@ -13,6 +13,21 @@ export function snippet(raw: string, max = 120): string {
     return clean.length > max ? clean.slice(0, max - 1) + '…' : clean;
 }
 
+/**
+ * Tri alphabétique par nom de famille, tolérant aux champs manquants : l'API
+ * MyGes renvoie parfois un `lastname` absent, ce qui faisait échouer toute la
+ * commande sur un `localeCompare` de `undefined`.
+ */
+export function byLastName(a: any, b: any): number {
+    return String(a?.lastname ?? '').localeCompare(String(b?.lastname ?? ''), 'fr');
+}
+
+/** Nom affichable d'une personne, jamais vide (Discord refuse les champs vides). */
+export function fullName(p: any): string {
+    const name = [p?.firstname, p?.lastname].filter(Boolean).join(' ').trim();
+    return name || 'Nom inconnu';
+}
+
 export function formatToFrenchTime(date: Date): string {
     return date.toLocaleTimeString('fr-FR', {
         hour: '2-digit',
