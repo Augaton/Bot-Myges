@@ -6,7 +6,7 @@ import { Command } from '../core/command';
 import { GesAPI } from '../myges/ges-api';
 import { encrypt } from '../crypto';
 import { loadData, makeSession, saveData, sessions } from '../core/store';
-import { checkNewProjects } from '../tasks/projects';
+import { runProjectCheck } from '../tasks/projects';
 import { log, logError } from '../utils/logger';
 
 export const LOGIN_MODAL_ID = 'loginModal';
@@ -69,8 +69,9 @@ export async function handleLoginModal(interaction: ModalSubmitInteraction) {
 
         log('AUTH', `Connexion réussie : ${username} (${interaction.user.id})`);
 
-        // Premier check pour charger les données (projets, etc.)
-        checkNewProjects(interaction.client);
+        // Premier check pour charger les données (projets, etc.). Volontairement
+        // non attendu : la réponse à l'utilisateur ne doit pas dépendre de l'API.
+        void runProjectCheck(interaction.client);
     } catch (error) {
         logError('AUTH', `Échec de connexion : ${username} (${interaction.user.id})`, error);
         await interaction.editReply({

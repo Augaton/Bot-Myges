@@ -3,6 +3,9 @@
 # Identifiants utilisateurs chiffrés : NE JAMAIS commit
 /saved_data.json
 saved_data.json
+saved_data.json.tmp
+# Archives locales du code (src.zip & co) : jamais dans le dépôt
+*.zip
 /node_modules
 node_modules
 /dist

@@ -7,6 +7,8 @@ import { SchoolService } from '../myges/services/school';
 import { getCurrentYear } from '../config';
 import { sessions } from '../core/store';
 import { fetchPhotoBuffer } from '../utils/photo';
+import { byLastName, fullName } from '../utils/format';
+import { logError } from '../utils/logger';
 import { shareRow, SHARE_ID } from '../utils/share';
 
 const command: Command = {
@@ -23,8 +25,8 @@ const command: Command = {
             const teachers: any[] = await SchoolService.getTeachers(token, getCurrentYear());
             if (!teachers || teachers.length === 0) return interaction.editReply('Aucun professeur trouvé pour cette année.');
 
-            // Tri alphabétique par nom de famille
-            teachers.sort((a, b) => a.lastname.localeCompare(b.lastname));
+            // Tri alphabétique par nom de famille (tolérant aux noms manquants)
+            teachers.sort(byLastName);
 
             let index = 0;
             // Cache des photos pour cette navigation : un même prof consulté
@@ -47,7 +49,7 @@ const command: Command = {
                     .setDescription(`Professeur ${i + 1}/${teachers.length}`)
                     .setColor(0xf1c40f)
                     .addFields(
-                        { name: 'Nom', value: `**${t.firstname} ${t.lastname}**`, inline: true },
+                        { name: 'Nom', value: `**${fullName(t)}**`, inline: true },
                         { name: 'Email', value: t.email ? `📧 ${t.email}` : 'Non renseigné', inline: false }
                     )
                     .setFooter({ text: `ID: ${t.uid || 'N/A'}` });
@@ -84,11 +86,15 @@ const command: Command = {
                 if (index < 0) index = 0;
                 if (index >= teachers.length) index = teachers.length - 1;
 
-                await interaction.editReply(await showTeacher(index));
+                try {
+                    await interaction.editReply(await showTeacher(index));
+                } catch (e) {
+                    logError('PROFS', 'Mise à jour de la fiche impossible :', e);
+                }
             });
         } catch (e) {
-            console.error(e);
-            interaction.editReply('❌ Erreur lors de la récupération des professeurs.');
+            logError('PROFS', 'Récupération des professeurs impossible :', e);
+            await interaction.editReply('❌ Erreur lors de la récupération des professeurs.');
         }
     },
 };

@@ -5,9 +5,10 @@ import {
 import { Command } from '../core/command';
 import { TimetableService } from '../myges/services/timetable';
 import { sessions } from '../core/store';
-import { renderDayImage, renderWeekImage } from '../utils/agendaImage';
+import { renderAgendaDay, renderAgendaWeek } from '../utils/renderPool';
 import { logError } from '../utils/logger';
 import { addDays, dayOptions, fromKey, getMonday, sameDay, startOfDay, weekOptions } from '../utils/datePicker';
+import { TtlCache } from '../utils/ttlCache';
 import { shareRow, SHARE_ID } from '../utils/share';
 
 interface AgendaView {
@@ -17,6 +18,13 @@ interface AgendaView {
 
 // Amplitude du décalage de la fenêtre de semaines proposées (≈ 3 mois).
 const WINDOW_SHIFT_WEEKS = 13;
+
+// Naviguer d'une semaine à l'autre puis revenir relançait un appel MyGes à
+// chaque clic. Un cache court suffit à supprimer ces allers-retours tout en
+// gardant un emploi du temps à jour. La clé inclut l'ID Discord : aucune donnée
+// n'est partagée entre utilisateurs.
+const TIMETABLE_TTL_MS = 60_000;
+const timetableCache = new TtlCache<any[]>(TIMETABLE_TTL_MS, 200);
 
 const command: Command = {
     data: new SlashCommandBuilder()
@@ -57,12 +65,18 @@ const command: Command = {
             }
 
             try {
-                const cours = (await TimetableService.getTimetable(currentToken, start, end)) || [];
-                // Le rendu canvas est synchrone et bloque l'event-loop : on cède
-                // la main d'abord pour que les autres interactions en attente
-                // puissent être acquittées (deferReply) avant ce blocage.
-                await new Promise((r) => setImmediate(r));
-                const buffer = mode === 'day' ? renderDayImage(cours, refDate) : renderWeekImage(cours, start);
+                const cacheKey = `${interaction.user.id}|${start.getTime()}|${end.getTime()}`;
+                let cours = timetableCache.get(cacheKey);
+                if (!cours) {
+                    cours = (await TimetableService.getTimetable(currentToken, start, end)) || [];
+                    timetableCache.set(cacheKey, cours);
+                }
+
+                // Le rendu canvas part sur un thread dédié : l'event-loop reste
+                // disponible pour accuser réception des autres interactions.
+                const buffer = mode === 'day'
+                    ? await renderAgendaDay(cours, refDate)
+                    : await renderAgendaWeek(cours, start);
                 const file = new AttachmentBuilder(buffer, { name: 'agenda.png' });
                 const embed = new EmbedBuilder()
                     .setColor(mode === 'day' ? 0x3498db : 0x5865f2)

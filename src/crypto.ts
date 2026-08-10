@@ -1,6 +1,6 @@
 import * as crypto from 'crypto';
 import * as dotenv from 'dotenv';
-dotenv.config();
+dotenv.config({ quiet: true }); // pas de bandeau publicitaire dans les logs serveur
 
 // AES-256-GCM : chiffrement authentifié (intègre un tag d'intégrité), plus
 // robuste que CBC qui est malléable.

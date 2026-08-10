@@ -1,5 +1,6 @@
 import { ChatInputCommandInteraction, EmbedBuilder, SlashCommandBuilder } from 'discord.js';
 import { Command } from '../core/command';
+import { logError } from '../utils/logger';
 
 const command: Command = {
     data: new SlashCommandBuilder()
@@ -21,7 +22,13 @@ const command: Command = {
 
         try {
             const start = Date.now();
-            const response = await fetch('https://api.kordis.fr', { method: 'HEAD' });
+            // Sans délai maximal, une API qui ne répond plus laisserait la
+            // commande en attente très longtemps — or c'est justement ce que
+            // /ping est censé détecter.
+            const response = await fetch('https://api.kordis.fr', {
+                method: 'HEAD',
+                signal: AbortSignal.timeout(5000),
+            });
             apiTime = Date.now() - start;
 
             if (response.status < 500) {
@@ -34,7 +41,7 @@ const command: Command = {
                 apiColor = 0xe67e22;
             }
         } catch (e) {
-            console.error('Erreur ping API:', e);
+            logError('PING', "L'API MyGes ne répond pas :", e);
         }
 
         const embed = new EmbedBuilder()

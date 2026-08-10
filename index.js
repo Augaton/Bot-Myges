@@ -1,10 +1,19 @@
-// index.js
+// Point d'entrée de production.
+// Le TypeScript est compilé en amont (`npm run build`) : plus de ts-node à
+// l'exécution, ce qui évite toute surprise lors d'une montée de version Node.
+const fs = require('fs');
 const path = require('path');
 
-// 1. On active la lecture du TypeScript
-require('ts-node').register({
-    project: path.join(__dirname, 'tsconfig.json') // Assure-toi d'avoir un tsconfig.json
-});
+const entry = path.join(__dirname, 'dist', 'index.js');
 
-// 2. On lance ton vrai fichier principal
-require('./src/index.ts');
+if (!fs.existsSync(entry)) {
+    console.error(
+        '❌ dist/ introuvable.\n' +
+        '   Compile le bot avant de le lancer :\n' +
+        '       npm install && npm run build\n' +
+        "   Puis démarre-le avec `npm start` (ou `node dist/index.js`)."
+    );
+    process.exit(1);
+}
+
+require(entry);
