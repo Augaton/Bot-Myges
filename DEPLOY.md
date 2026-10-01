@@ -1,62 +1,115 @@
-# Déploiement — serveur Node.js 26
-
-## Ce qui a changé
-
-Le bot ne s'exécute plus via `ts-node`. Le TypeScript est **compilé en amont**
-(`npm run build` → `dist/`) et le serveur ne lance que du JavaScript. C'est ce
-qui rend la montée vers Node 26 (et les suivantes) sans risque : `ts-node`
-s'appuie sur des API internes de Node qui bougent à chaque version majeure.
-
-| Avant | Après |
-|---|---|
-| `node index.js` → `ts-node` → `src/index.ts` | `npm run build` puis `npm start` → `dist/index.js` |
-| `ts-node` en dépendance d'exécution | supprimé |
-| `saved_data.json` relatif au dossier courant | résolu depuis la racine du projet |
-
-`index.js` reste utilisable (`node index.js`) : il charge `dist/` et affiche un
-message explicite si le build manque.
+# Déploiement
 
 ## Prérequis serveur
 
-- **Node.js ≥ 22.18** (`engines` dans `package.json`), **testé et prévu pour 26**.
+- **Node.js ≥ 22.18** (`engines` dans `package.json`), testé sur 22 et prévu pour 26.
   Un `.nvmrc` fixe la version : `nvm use`.
 - Aucune toolchain de compilation native n'est nécessaire : `@napi-rs/canvas`
-  livre des binaires précompilés et utilise **N-API**, dont l'ABI est stable
-  d'une version majeure de Node à l'autre. Rien à recompiler après un upgrade.
+  livre des binaires précompilés (N-API, ABI stable d'une version de Node à l'autre).
+- Gestionnaire de paquets : **npm uniquement** (`package-lock.json`). `yarn.lock`
+  a été supprimé.
 
 ## Installation / mise à jour
 
 ```bash
-nvm install 26 && nvm use          # ou la version de ton gestionnaire
-npm ci                             # installe exactement le package-lock
-npm run build                      # génère dist/
-npm start                          # lance le bot (rebuild automatique via prestart)
+npm ci                  # installe exactement le package-lock (devDependencies comprises, pour le build)
+npm run build           # compile src/ → dist/ (TypeScript 7)
+npm start               # build + lancement supervisé (voir plus bas)
 ```
 
-Développement local (Node exécute le TypeScript nativement, sans ts-node) :
+Vérifications :
 
 ```bash
-npm run dev        # node --watch src/index.ts
-npm run typecheck  # vérification de types sans émettre
+npm test                # build + tests (node:test, aucune dépendance)
+npm run typecheck       # vérification de types sans émettre
 ```
+
+Développement local (recompile et relance à chaque modification) :
+
+```bash
+npm run dev
+```
+
+⚠️ `npm run dev` se connecte avec le token du `.env` : si le bot de production
+tourne avec le même token, les deux instances répondront aux commandes.
+
+## Lancement : superviseur intégré ou systemd
+
+`npm start` (= `node index.js`) lance le bot via un **petit superviseur** : si le
+bot s'arrête sur une erreur, il est relancé automatiquement (1 s, puis 2 s, 4 s…
+jusqu'à 60 s ; le délai repart de 1 s après 5 min de fonctionnement stable).
+Une erreur de configuration (token invalide, `ENCRYPTION_KEY` incorrecte) arrête
+tout sans relancer en boucle. Utile sur un panel, dans `screen`/`tmux`, etc.
+
+Le bot s'arrête de lui-même (pour être relancé) dans trois cas : exception non
+interceptée, session Discord invalidée, ou passerelle Discord injoignable depuis
+plus de 15 min. **Il doit donc toujours tourner sous un superviseur** : celui
+d'`index.js`, ou systemd ci-dessous.
 
 ## Variables d'environnement
 
 | Variable | Requis | Rôle |
 |---|---|---|
 | `DISCORD_TOKEN` | oui | Token du bot. Absent → le processus refuse de démarrer. |
-| `ENCRYPTION_KEY` | oui | Exactement 32 caractères ASCII. Chiffre les identifiants MyGes. |
-| `DB_FILE` | non | Chemin du fichier de persistance (défaut : `<racine>/saved_data.json`). |
+| `ENCRYPTION_KEY` | oui | Au moins 32 caractères (exactement 32 pour relire des données antérieures à la v3.4). Sert à chiffrer les identifiants MyGes. |
+| `OWNER_IDS` | non | ID(s) Discord du/des propriétaire(s), séparés par des virgules. Défaut : `456653480048852995`. Peuvent utiliser `/config` sur tout serveur, même sans être admin. |
+| `DB_FILE` | non | Fichier de persistance (défaut : `<racine>/saved_data.json`). |
+| `CAMPUS_FILE` | non | Codes d'accès des campus (défaut : `<racine>/campus.json`). |
+
+Le `.env` est lu nativement par Node depuis la **racine du projet** (plus de
+dépendance `dotenv`) ; une variable déjà définie dans l'environnement est prioritaire.
+
+Le fuseau horaire est **forcé à `Europe/Paris`** au démarrage : un serveur
+réglé en UTC ne décale plus l'agenda. Rien à configurer.
 
 ⚠️ **`ENCRYPTION_KEY` et `saved_data.json` ne doivent jamais être sur le même
 support de sauvegarde non chiffré** : la clé déchiffre tous les mots de passe
-MyGes stockés. Sur le serveur :
+MyGes stockés.
 
 ```bash
-chmod 600 .env saved_data.json
+chmod 600 .env saved_data.json campus.json
 ```
 
-Le bot écrit désormais `saved_data.json` en mode `0600` de lui-même.
+## Chiffrement des identifiants (v3.4)
+
+La clé de chiffrement n'est plus `ENCRYPTION_KEY` telle quelle mais une clé
+**dérivée par scrypt** (sel aléatoire propre à l'installation, enregistré dans
+`saved_data.json` sous `crypto`). Au premier démarrage en v3.4, les identifiants
+existants sont **rechiffrés automatiquement** (log `[STORE] Chiffrement renforcé…`).
+
+- Une copie du fichier d'origine est gardée : `saved_data.json.bak-avant-scrypt`
+  (mode 600). Elle contient les identifiants à l'ancien format : supprime-la
+  une fois la v3.4 validée.
+- **Retour arrière en v3.3** : arrêter le bot, remettre la copie à la place de
+  `saved_data.json`, puis relancer l'ancienne version (elle ne sait pas lire le
+  nouveau format).
+- Ne jamais changer `ENCRYPTION_KEY` ni supprimer la clé `crypto` du fichier :
+  tous les utilisateurs devraient refaire `/login`.
+
+## Alertes en MP
+
+Toutes les 15 min, le bot vérifie pour chaque utilisateur connecté (au plus une
+lecture MyGes par heure et par personne) :
+
+- les **nouvelles notes** → MP (premier passage silencieux : l'historique n'est pas envoyé) ;
+- les **échéances de projets** → MP 24 h puis 2 h avant.
+
+Chacun règle ses alertes avec `/alertes` (activées par défaut). Les notes déjà
+vues sont mémorisées sous forme d'empreintes HMAC, jamais en clair. Aucun
+intent Discord supplémentaire n'est nécessaire pour envoyer des MP.
+
+## Codes d'accès des campus (`campus.json`)
+
+Le dépôt GitHub est public : les codes ne sont plus dans le code source. Ils sont
+lus dans `campus.json` (ignoré par git), au format de `campus.example.json` :
+
+```json
+{ "nation": "…", "erard": "…", "voltaire1": "…", "voltaire2": "…", "rauch": "…" }
+```
+
+**À copier sur le serveur** (il n'est pas envoyé par git). Sans ce fichier,
+`/campus` affiche les adresses avec « code non renseigné ». Le fichier est relu à
+chaque appel : pas besoin de redémarrer après modification.
 
 ## Service systemd
 
@@ -69,13 +122,17 @@ After=network-online.target
 Type=simple
 User=botmyges
 WorkingDirectory=/opt/botdiscordmyges
+# systemd joue déjà le rôle de superviseur : on lance le bot directement.
 ExecStart=/usr/bin/node dist/index.js
 Restart=always
 RestartSec=10
-# Le bot gère SIGTERM : il ferme proprement la passerelle Discord.
+# Erreur de configuration (code 78) : inutile de relancer en boucle.
+RestartPreventExitStatus=78
 KillSignal=SIGTERM
 TimeoutStopSec=20
 Environment=NODE_ENV=production
+# Limite l'emballement mémoire de glibc avec les threads de rendu (canvas).
+Environment=MALLOC_ARENA_MAX=2
 EnvironmentFile=/opt/botdiscordmyges/.env
 
 # Durcissement
@@ -95,22 +152,21 @@ sudo systemctl enable --now botmyges
 journalctl -u botmyges -f
 ```
 
-## ⚠️ Impact sur ton déploiement SFTP actuel
+## Diagnostic
 
-`.vscode/sftp.json` est en `uploadOnSave: true` : jusqu'ici tu envoyais les
-`.ts` et le serveur les exécutait via ts-node. **Ça ne suffit plus** — le serveur
-lance `dist/`. Deux options :
+- Toutes les heures, une ligne `[SANTÉ]` donne la RAM, le nombre de sessions et
+  le ping : une RAM qui grimpe d'heure en heure se repère tout de suite.
+- Les coupures de la passerelle Discord sont journalisées (`[DISCORD] Passerelle…`).
+- `/ping` affiche la version, l'uptime et la RAM du bot.
+- Les erreurs MyGes passagères (5xx) sont rejouées automatiquement et
+  journalisées en `[MYGES] … nouvelle tentative`.
 
-1. **Build sur le serveur** (recommandé) : tu continues d'envoyer `src/`, puis
-   sur le serveur `npm ci && npm run build && systemctl restart botmyges`.
-2. **Build en local** : ajoute `dist` à ce qui est téléversé (il est dans
-   `.gitignore`, ce qui n'empêche pas le SFTP de l'envoyer) et redémarre le service.
+## Déploiement via SFTP
 
-Dans les deux cas, un `src/*.ts` téléversé seul ne change plus rien au
-comportement du bot tant que le build n'a pas été rejoué.
+Le serveur exécute `dist/`, pas `src/` : un `.ts` téléversé seul ne change rien
+tant que le build n'a pas été rejoué.
 
-## Note sur le gestionnaire de paquets
-
-Le dépôt contient **`package-lock.json` et `yarn.lock`**. Seul `package-lock.json`
-est à jour. Choisis-en un et supprime l'autre (ainsi que `.yarnrc`), sinon les
-versions installées diffèrent selon l'outil utilisé sur le serveur.
+1. **Build sur le serveur** (recommandé) : envoyer `src/`, puis
+   `npm ci && npm run build` et redémarrer le bot.
+2. **Build en local** : téléverser aussi `dist/` (ignoré par git, pas par le SFTP),
+   puis redémarrer.

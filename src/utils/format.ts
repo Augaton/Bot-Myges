@@ -28,6 +28,11 @@ export function fullName(p: any): string {
     return name || 'Nom inconnu';
 }
 
+/** Nom d'un cours sans le préfixe de trimestre (« T1 - Anglais » → « Anglais »). */
+export function courseName(raw: any): string {
+    return String(raw?.name || 'Cours').replace(/^T\d+\s-\s/i, '').trim();
+}
+
 export function formatToFrenchTime(date: Date): string {
     return date.toLocaleTimeString('fr-FR', {
         hour: '2-digit',

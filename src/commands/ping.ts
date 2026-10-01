@@ -1,6 +1,18 @@
 import { ChatInputCommandInteraction, EmbedBuilder, SlashCommandBuilder } from 'discord.js';
 import { Command } from '../core/command';
+import { sessionCount } from '../core/store';
+import { BOT_VERSION } from '../config';
 import { logError } from '../utils/logger';
+
+/** Durée lisible : « 3 j 4 h », « 2 h 15 min », « 42 min ». */
+function formatUptime(seconds: number): string {
+    const d = Math.floor(seconds / 86400);
+    const h = Math.floor((seconds % 86400) / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    if (d > 0) return `${d} j ${h} h`;
+    if (h > 0) return `${h} h ${m} min`;
+    return `${m} min`;
+}
 
 const command: Command = {
     data: new SlashCommandBuilder()
@@ -31,6 +43,7 @@ const command: Command = {
             });
             apiTime = Date.now() - start;
 
+            await response.body?.cancel().catch(() => {});
             if (response.status < 500) {
                 // 200, 401 ou 403 -> le serveur est vivant
                 apiStatus = '🟢 En Ligne';
@@ -49,7 +62,14 @@ const command: Command = {
             .setColor(apiColor)
             .addFields(
                 { name: '🤖 Bot Discord', value: `**Latence :** ${roundtripLatency}ms\n**WebSocket :** ${wsLatency}ms`, inline: true },
-                { name: '🌐 API MyGes', value: `**État :** ${apiStatus}\n**Réponse :** ${apiTime}ms`, inline: true }
+                { name: '🌐 API MyGes', value: `**État :** ${apiStatus}\n**Réponse :** ${apiTime}ms`, inline: true },
+                {
+                    name: '🖥️ Système',
+                    value:
+                        `**Version :** ${BOT_VERSION}\n**En ligne depuis :** ${formatUptime(process.uptime())}\n` +
+                        `**RAM :** ${Math.round(process.memoryUsage().rss / 1048576)} Mo · **Sessions MyGes :** ${sessionCount()}`,
+                    inline: false,
+                }
             )
             .setFooter({ text: apiMsg });
 

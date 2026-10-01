@@ -9,56 +9,70 @@ import { shareRow } from '../utils/share';
  */
 export function buildChangelogEmbed(client: Client): EmbedBuilder {
     return new EmbedBuilder()
-        .setTitle(`🚀 Mise à jour ${BOT_VERSION} - "Plus rapide, plus solide"`)
-        .setDescription("Pas de nouvelle commande cette fois : cette version s'attaque à **tout ce qui coinçait**. Le bot répond plus vite, ne reste plus bloqué sur « réfléchit… », et ne s'arrête plus tout seul.")
+        .setTitle(`🚀 Mise à jour ${BOT_VERSION} - "Tes notes en MP, ton agenda à l'heure"`)
+        .setDescription("Le bot te prévient maintenant **en message privé** : nouvelles notes, rendus qui approchent. Ton emploi du temps s'exporte dans ton agenda, retrouve ses bonnes heures, et le bot tient bien mieux la distance.")
         .setColor(0x5865f2)
         .setThumbnail(client.user?.displayAvatarURL() || null)
         .addFields(
             {
-                name: '⚡ `/agenda` et `/notes` nettement plus rapides',
+                name: '📝 Nouveau : tes notes en MP',
                 value:
-                    "• Naviguer entre les semaines ne relance plus une requête MyGes **à chaque clic** : l'emploi du temps que tu viens de consulter reste en mémoire une minute.\n" +
-                    '• Les images (agenda, graphiques de notes) sont désormais dessinées **en parallèle**, sur des threads dédiés.\n' +
-                    '• Résultat : même quand plusieurs personnes utilisent le bot en même temps, les commandes ne se marchent plus dessus.',
+                    '• Dès qu\'une note apparaît sur MyGes, je t\'envoie un **message privé** avec la matière et la note (vérifié toutes les heures).\n' +
+                    '• Examens et moyennes définitives aussi. Aucune note n\'est stockée en clair.',
             },
             {
-                name: '🩹 Fini les commandes bloquées sur « réfléchit… »',
-                value:
-                    "• Quand une commande échouait, elle restait **indéfiniment** en attente. Elle affiche maintenant un vrai message d'erreur.\n" +
-                    '• `/absences` pouvait tomber en panne silencieuse : corrigé.\n' +
-                    '• Si MyGes ne répond plus, la commande **abandonne proprement** au lieu de patienter sans fin.',
+                name: '⏰ Nouveau : rappels de rendus',
+                value: '• Un MP **la veille** (24 h avant) puis **2 h avant** chaque échéance de projet, avec l\'étape et la consigne.',
             },
             {
-                name: "🛡️ Le bot ne s'arrête plus tout seul",
+                name: '🔔 Nouveau : `/alertes`',
                 value:
-                    '• Une simple erreur réseau au mauvais moment pouvait **couper le bot net**. Il encaisse désormais et continue de tourner.\n' +
-                    '• Après un redémarrage, les commandes sont **utilisables immédiatement**, sans attendre la reconnexion de tous les comptes.\n' +
-                    '• Arrêts et redémarrages propres côté serveur : plus de statut « en ligne » fantôme.',
+                    '• Active ou coupe séparément les notes et les rappels, et **teste la réception des MP**.\n' +
+                    '• Tout est activé par défaut : pense à accepter les MP des membres du serveur.',
             },
             {
-                name: '🔐 Tes identifiants mieux protégés',
-                value:
-                    "• Un bug de concurrence pouvait **effacer des identifiants enregistrés** lorsqu'une connexion tombait pendant une vérification des projets : on se retrouvait déconnecté sans raison. Corrigé.\n" +
-                    '• Le fichier de sauvegarde est maintenant **lisible par le bot seul** sur le serveur.\n' +
-                    '• Pour rappel : identifiants chiffrés en **AES-256-GCM**, token jamais transmis ailleurs qu\'à MyGes.',
+                name: '📥 Nouveau : `/export`',
+                value: '• Ton emploi du temps (jusqu\'à 12 semaines) en fichier **.ics**, à importer dans **Google Agenda**, ton **iPhone** ou **Outlook**.',
             },
             {
-                name: '🧩 Fiches incomplètes enfin tolérées',
+                name: '🕘 `/agenda` : chaque cours à sa place',
                 value:
-                    '• `/profs`, `/trombi` et `/profil` ne plantent plus quand MyGes renvoie une fiche **sans nom, sans email ou sans photo** : la donnée manquante est simplement signalée.\n' +
-                    "• Idem pour `/news`, `/prochain` et `/projets` lorsque l'école renvoie une réponse vide.",
+                    '• Selon le serveur qui héberge le bot, les cours pouvaient être **décalés de 2 h** (un cours de 9 h dessiné sur la ligne de 7 h). Le bot vit désormais **à l\'heure de Paris**, où qu\'il tourne.\n' +
+                    '• Heures alignées sur leur ligne, repère à chaque **demi-heure**, et ligne « maintenant » limitée à **la colonne du jour**.',
             },
             {
-                name: '🛠️ Sous le capot',
+                name: '🩹 Fini les « erreurs 500 » en rafale',
                 value:
-                    '• Blocage du bot pendant le dessin des images : **960 ms → 3 ms** sur 8 rendus simultanés.\n' +
-                    '• Le fichier de données n\'est plus relu et réanalysé à chaque interaction.\n' +
-                    '• Toutes les dépendances à jour : **0 faille connue** (5 auparavant, dont 3 critiques).\n' +
-                    '• Le bot est prêt pour **Node.js 26**.',
+                    '• Quand MyGes a un raté passager, le bot **réessaie tout seul** avant de t\'afficher une erreur.\n' +
+                    '• Les messages disent **ce qui se passe** : MyGes en panne, trop lent, ou mot de passe changé.\n' +
+                    '• Ton accès MyGes est **renouvelé avant d\'expirer**.',
+            },
+            {
+                name: '⚡ Plus rapide',
+                value:
+                    '• `/notes` et `/profil` restent en mémoire quelques instants : les relancer est **instantané**.\n' +
+                    '• Après un redémarrage, ta session revient **dès ta première commande**, sans attendre les autres, et plus jamais de « connecte-toi » à tort si MyGes était en panne.',
+            },
+            {
+                name: '🛡️ Un bot qui tient sur la durée',
+                value:
+                    '• Le dessin des images consomme **nettement moins de mémoire**.\n' +
+                    '• En cas de pépin, le bot **redémarre automatiquement** ; si la connexion à Discord se bloque, il se relance tout seul.',
+            },
+            {
+                name: '🔐 Sécurité',
+                value:
+                    '• **Chiffrement renforcé** de tes identifiants (clé dérivée par scrypt), appliqué automatiquement : rien à refaire.\n' +
+                    '• `/login` limite les **tentatives répétées** : ton compte MyGes ne peut pas être verrouillé à force d\'essais via le bot.\n' +
+                    '• Dépendances à jour : **0 faille connue**. `/campus` n\'a plus de bouton de partage.',
+            },
+            {
+                name: '⚙️ Pour les admins',
+                value: '• `/config` prévient si le bot **n\'a pas le droit d\'écrire** dans le salon choisi (sinon, les alertes échouaient sans bruit).',
             },
             {
                 name: '✅ Aucune action requise',
-                value: '• Rien à reconfigurer : `/config`, tes salons et ton compte de référence sont conservés tels quels.',
+                value: '• Rien à reconfigurer : ta connexion, `/config`, tes salons et ton compte de référence sont conservés.',
             }
         )
         .setFooter({ text: "Merci d'utiliser MyGes Bot ! 🎓" })

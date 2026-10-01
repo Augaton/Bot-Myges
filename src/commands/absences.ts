@@ -2,8 +2,8 @@ import { ChatInputCommandInteraction, EmbedBuilder, MessageFlags, SlashCommandBu
 import { Command } from '../core/command';
 import { ProfileService } from '../myges/services/profile';
 import { getCurrentYear } from '../config';
-import { sessions } from '../core/store';
 import { logError } from '../utils/logger';
+import { apiErrorMessage, sessionFor } from '../utils/replies';
 import { shareRow } from '../utils/share';
 
 const command: Command = {
@@ -13,8 +13,8 @@ const command: Command = {
 
     execute: async (interaction: ChatInputCommandInteraction) => {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-        const token = sessions.get(interaction.user.id);
-        if (!token) return interaction.editReply("❌ Connecte-toi d'abord. (/login)");
+        const token = await sessionFor(interaction);
+        if (!token) return;
 
         let abs: any[];
         try {
@@ -22,7 +22,7 @@ const command: Command = {
             abs = (await ProfileService.getAbsences(token, getCurrentYear())) || [];
         } catch (e) {
             logError('ABSENCES', 'Récupération des absences impossible :', e);
-            return interaction.editReply('❌ Erreur lors de la récupération des absences.');
+            return interaction.editReply(apiErrorMessage(e, 'les absences'));
         }
         if (!Array.isArray(abs)) abs = [];
 

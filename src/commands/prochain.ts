@@ -1,9 +1,9 @@
 import { ChatInputCommandInteraction, EmbedBuilder, MessageFlags, SlashCommandBuilder } from 'discord.js';
 import { Command } from '../core/command';
 import { TimetableService } from '../myges/services/timetable';
-import { sessions } from '../core/store';
 import { formatCampus, formatToFrenchTime } from '../utils/format';
 import { logError } from '../utils/logger';
+import { apiErrorMessage, sessionFor } from '../utils/replies';
 import { shareRow } from '../utils/share';
 
 const command: Command = {
@@ -13,8 +13,8 @@ const command: Command = {
 
     execute: async (interaction: ChatInputCommandInteraction) => {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-        const token = sessions.get(interaction.user.id);
-        if (!token) return interaction.editReply("❌ Connecte-toi d'abord. (/login)");
+        const token = await sessionFor(interaction);
+        if (!token) return;
 
         try {
             const start = new Date();
@@ -36,7 +36,7 @@ const command: Command = {
             let salle = 'Non défini';
             let icon = '🏫';
 
-            if (c.modality === 'Distanciel' || (c.rooms && c.rooms.some((r: any) => r.name.toLowerCase().includes('distanciel')))) {
+            if (c.modality === 'Distanciel' || (c.rooms && c.rooms.some((r: any) => String(r?.name ?? '').toLowerCase().includes('distanciel')))) {
                 salle = 'Distanciel';
                 icon = '🏠';
             } else if (c.rooms && c.rooms.length > 0) {
@@ -61,7 +61,7 @@ const command: Command = {
             await interaction.editReply({ embeds: [embed], components: [shareRow()] });
         } catch (e) {
             logError('PROCHAIN', 'Récupération du prochain cours impossible :', e);
-            await interaction.editReply('❌ Erreur lors de la récupération.');
+            await interaction.editReply(apiErrorMessage(e, 'le prochain cours'));
         }
     },
 };

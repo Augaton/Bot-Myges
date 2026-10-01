@@ -2,7 +2,7 @@
 // polices embarquées, palette dark-mode Discord et helpers de dessin/texte.
 // Utilise @napi-rs/canvas : binaires précompilés, aucun build natif requis.
 import { createCanvas, GlobalFonts, SKRSContext2D } from '@napi-rs/canvas';
-import * as path from 'path';
+import * as path from 'node:path';
 import { logError } from './logger';
 
 // --- POLICES EMBARQUÉES ---
@@ -14,8 +14,10 @@ let fontsReady = false;
 export function ensureFonts() {
     if (fontsReady) return;
     try {
-        GlobalFonts.registerFromPath(path.join(FONT_DIR, 'DejaVuSans.ttf'), 'AgendaSans');
-        GlobalFonts.registerFromPath(path.join(FONT_DIR, 'DejaVuSans-Bold.ttf'), 'AgendaSansBold');
+        // Le registre de polices est natif : il peut déjà contenir nos polices si
+        // un autre thread (worker de rendu) les a enregistrées. Pas de doublon.
+        if (!GlobalFonts.has(FONT)) GlobalFonts.registerFromPath(path.join(FONT_DIR, 'DejaVuSans.ttf'), FONT);
+        if (!GlobalFonts.has(FONT_BOLD)) GlobalFonts.registerFromPath(path.join(FONT_DIR, 'DejaVuSans-Bold.ttf'), FONT_BOLD);
     } catch (e) {
         logError('CANVAS', 'Polices non chargées, fallback système :', e);
     }

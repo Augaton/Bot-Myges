@@ -1,6 +1,9 @@
 // Main API Client
 export { GesAPI } from './ges-api';
 
+// Erreurs
+export { BadCredentialsError, MyGesError } from './errors';
+
 // Types
 export * from './types/auth';
 

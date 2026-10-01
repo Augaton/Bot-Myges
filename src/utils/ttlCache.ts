@@ -27,16 +27,24 @@ export class TtlCache<T> {
         return hit.value;
     }
 
-    set(key: string, value: T): void {
+    /** `ttlMs` remplace, pour cette entrée seulement, la durée de vie par défaut. */
+    set(key: string, value: T, ttlMs = this.ttlMs): void {
         // Réinsertion : la clé repasse en fin d'ordre d'insertion, ce qui fait
         // de l'éviction ci-dessous un vrai « plus ancien d'abord ».
         this.map.delete(key);
-        this.map.set(key, { value, expiresAt: Date.now() + this.ttlMs });
+        this.map.set(key, { value, expiresAt: Date.now() + ttlMs });
 
         while (this.map.size > this.maxEntries) {
             const oldest = this.map.keys().next();
             if (oldest.done) break;
             this.map.delete(oldest.value);
+        }
+    }
+
+    /** Oublie toutes les entrées dont la clé commence par `prefix`. */
+    deleteByPrefix(prefix: string): void {
+        for (const key of this.map.keys()) {
+            if (key.startsWith(prefix)) this.map.delete(key);
         }
     }
 }

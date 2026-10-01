@@ -3,12 +3,12 @@ import {
     EmbedBuilder, MessageFlags, SlashCommandBuilder, StringSelectMenuBuilder,
 } from 'discord.js';
 import { Command } from '../core/command';
-import { TimetableService } from '../myges/services/timetable';
-import { sessions } from '../core/store';
+import { getSession } from '../core/store';
+import { getTimetable } from '../core/mygesData';
 import { renderAgendaDay, renderAgendaWeek } from '../utils/renderPool';
-import { logError } from '../utils/logger';
+import { log, logError } from '../utils/logger';
+import { apiErrorMessage, noSessionMessage } from '../utils/replies';
 import { addDays, dayOptions, fromKey, getMonday, sameDay, startOfDay, weekOptions } from '../utils/datePicker';
-import { TtlCache } from '../utils/ttlCache';
 import { shareRow, SHARE_ID } from '../utils/share';
 
 interface AgendaView {
@@ -18,13 +18,6 @@ interface AgendaView {
 
 // Amplitude du décalage de la fenêtre de semaines proposées (≈ 3 mois).
 const WINDOW_SHIFT_WEEKS = 13;
-
-// Naviguer d'une semaine à l'autre puis revenir relançait un appel MyGes à
-// chaque clic. Un cache court suffit à supprimer ces allers-retours tout en
-// gardant un emploi du temps à jour. La clé inclut l'ID Discord : aucune donnée
-// n'est partagée entre utilisateurs.
-const TIMETABLE_TTL_MS = 60_000;
-const timetableCache = new TtlCache<any[]>(TIMETABLE_TTL_MS, 200);
 
 const command: Command = {
     data: new SlashCommandBuilder()
@@ -38,7 +31,7 @@ const command: Command = {
         try {
             await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         } catch (e: any) {
-            console.warn(`[Agenda] deferReply impossible (interaction expirée, code ${e?.code}).`);
+            log('AGENDA', `deferReply impossible (interaction expirée, code ${e?.code}).`);
             return;
         }
 
@@ -49,8 +42,8 @@ const command: Command = {
 
         // Génère la vue graphique (image PNG) pour un mode et une date de référence.
         const generateAgenda = async (mode: 'day' | 'week', refDate: Date): Promise<AgendaView> => {
-            const currentToken = sessions.get(interaction.user.id);
-            if (!currentToken) return errorView('Session expirée. Fais /login');
+            const currentToken = await getSession(interaction.user.id);
+            if (!currentToken) return errorView(noSessionMessage(interaction.user.id));
 
             let start: Date;
             let end: Date;
@@ -65,12 +58,9 @@ const command: Command = {
             }
 
             try {
-                const cacheKey = `${interaction.user.id}|${start.getTime()}|${end.getTime()}`;
-                let cours = timetableCache.get(cacheKey);
-                if (!cours) {
-                    cours = (await TimetableService.getTimetable(currentToken, start, end)) || [];
-                    timetableCache.set(cacheKey, cours);
-                }
+                // Mis en cache une minute (voir mygesData) : naviguer d'une
+                // semaine à l'autre puis revenir ne rappelle pas MyGes.
+                const cours = await getTimetable(interaction.user.id, currentToken, start, end);
 
                 // Le rendu canvas part sur un thread dédié : l'event-loop reste
                 // disponible pour accuser réception des autres interactions.
@@ -84,7 +74,7 @@ const command: Command = {
                 return { embeds: [embed], files: [file] };
             } catch (e) {
                 logError('AGENDA', "Impossible de générer l'agenda :", e);
-                return errorView("Impossible de récupérer l'agenda.");
+                return errorView(apiErrorMessage(e, "l'emploi du temps"));
             }
         };
 
@@ -166,14 +156,15 @@ const command: Command = {
         const col = msg.createMessageComponentCollector({ time: 300_000 });
 
         col.on('collect', async (i) => {
-            if (i.user.id !== interaction.user.id) {
-                return i.reply({ content: 'Pas touche !', flags: MessageFlags.Ephemeral });
-            }
-            col.resetTimer(); // tant que l'utilisateur navigue, la session reste ouverte
-            if (i.customId === SHARE_ID) return; // traité par le routeur global
-            await i.deferUpdate();
-
             try {
+                if (i.user.id !== interaction.user.id) {
+                    await i.reply({ content: 'Pas touche !', flags: MessageFlags.Ephemeral });
+                    return;
+                }
+                col.resetTimer(); // tant que l'utilisateur navigue, la session reste ouverte
+                if (i.customId === SHARE_ID) return; // traité par le routeur global
+                await i.deferUpdate();
+
                 // --- Sélecteur de date ---
                 if (i.isStringSelectMenu()) {
                     const picked = fromKey(i.values[0]);
