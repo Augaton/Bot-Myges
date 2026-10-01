@@ -1,4 +1,4 @@
-import { Client, TextChannel } from 'discord.js';
+import { Client } from 'discord.js';
 import { BOT_VERSION } from '../config';
 import { getGuildConfig, loadData, saveData } from '../core/store';
 import { buildChangelogEmbed } from '../commands/changelog';
@@ -23,9 +23,9 @@ export async function announceUpdateIfNeeded(client: Client) {
 
         log('MAJ', `Serveur ${guildId} : nouvelle version ${BOT_VERSION} (précédente : ${cfg.lastAnnouncedVersion ?? 'aucune'}) → annonce`);
 
-        const channel = (await client.channels.fetch(cfg.updateChannelId).catch(() => null)) as TextChannel;
-        if (!channel) {
-            logError('MAJ', `Serveur ${guildId} : salon de MAJ ${cfg.updateChannelId} introuvable, annonce ignorée.`);
+        const channel = await client.channels.fetch(cfg.updateChannelId).catch(() => null);
+        if (!channel?.isSendable()) {
+            logError('MAJ', `Serveur ${guildId} : salon de MAJ ${cfg.updateChannelId} introuvable ou inaccessible, annonce ignorée.`);
             continue;
         }
 

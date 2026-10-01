@@ -4,6 +4,8 @@
 /saved_data.json
 saved_data.json
 saved_data.json.tmp
+# Codes d'accès des campus : le dépôt est public, ils ne doivent jamais y figurer
+/campus.json
 # Archives locales du code (src.zip & co) : jamais dans le dépôt
 *.zip
 /node_modules

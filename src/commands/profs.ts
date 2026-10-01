@@ -5,10 +5,10 @@ import {
 import { Command } from '../core/command';
 import { SchoolService } from '../myges/services/school';
 import { getCurrentYear } from '../config';
-import { sessions } from '../core/store';
 import { fetchPhotoBuffer } from '../utils/photo';
 import { byLastName, fullName } from '../utils/format';
 import { logError } from '../utils/logger';
+import { apiErrorMessage, sessionFor } from '../utils/replies';
 import { shareRow, SHARE_ID } from '../utils/share';
 
 const command: Command = {
@@ -18,8 +18,8 @@ const command: Command = {
 
     execute: async (interaction: ChatInputCommandInteraction) => {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-        const token = sessions.get(interaction.user.id);
-        if (!token) return interaction.editReply("❌ Connecte-toi d'abord. (/login)");
+        const token = await sessionFor(interaction);
+        if (!token) return;
 
         try {
             const teachers: any[] = await SchoolService.getTeachers(token, getCurrentYear());
@@ -76,25 +76,34 @@ const command: Command = {
             const collector = msg.createMessageComponentCollector({ componentType: ComponentType.Button, time: 300000 });
 
             collector.on('collect', async (i) => {
-                if (i.user.id !== interaction.user.id) return i.reply({ content: 'Pas touche !', flags: MessageFlags.Ephemeral });
-                if (i.customId === SHARE_ID) return; // traité par le routeur global
-                await i.deferUpdate();
-
-                if (i.customId === 'prev_t') index--;
-                else if (i.customId === 'next_t') index++;
-
-                if (index < 0) index = 0;
-                if (index >= teachers.length) index = teachers.length - 1;
-
                 try {
+                    if (i.user.id !== interaction.user.id) {
+                        await i.reply({ content: 'Pas touche !', flags: MessageFlags.Ephemeral });
+                        return;
+                    }
+                    if (i.customId === SHARE_ID) return; // traité par le routeur global
+                    collector.resetTimer(); // tant que l'utilisateur navigue, la session reste ouverte
+                    await i.deferUpdate();
+
+                    if (i.customId === 'prev_t') index--;
+                    else if (i.customId === 'next_t') index++;
+
+                    if (index < 0) index = 0;
+                    if (index >= teachers.length) index = teachers.length - 1;
+
                     await interaction.editReply(await showTeacher(index));
                 } catch (e) {
                     logError('PROFS', 'Mise à jour de la fiche impossible :', e);
                 }
             });
+
+            collector.on('end', async () => {
+                // Navigation devenue inerte : on la retire, le partage reste possible.
+                await interaction.editReply({ components: [shareRow()] }).catch(() => {});
+            });
         } catch (e) {
             logError('PROFS', 'Récupération des professeurs impossible :', e);
-            await interaction.editReply('❌ Erreur lors de la récupération des professeurs.');
+            await interaction.editReply(apiErrorMessage(e, 'la liste des professeurs'));
         }
     },
 };

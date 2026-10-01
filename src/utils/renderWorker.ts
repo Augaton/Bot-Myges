@@ -2,7 +2,7 @@
 // Voir renderPool.ts pour l'orchestration côté thread principal.
 //
 // Ce fichier n'est jamais importé directement : il est chargé par `new Worker()`.
-import { parentPort } from 'worker_threads';
+import { parentPort } from 'node:worker_threads';
 import { renderDayImage, renderWeekImage } from './agendaImage';
 import { renderNotesOverview, renderSubjectCard } from './notesImage';
 

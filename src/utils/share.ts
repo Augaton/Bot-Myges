@@ -23,6 +23,19 @@ export const shareRow = () => new ActionRowBuilder<ButtonBuilder>().addComponent
 // Nom de fichier d'une URL CDN Discord, sans les paramètres de signature.
 const fileNameOf = (url: string) => url.split('?')[0].split('/').pop() || '';
 
+// Seules les pièces jointes hébergées par Discord sont re-téléchargées, avec un
+// délai et une taille bornés : le bot ne doit jamais aller chercher n'importe quoi.
+const CDN_HOSTS = new Set(['cdn.discordapp.com', 'media.discordapp.net']);
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const isDiscordCdn = (url: string) => {
+    try {
+        const u = new URL(url);
+        return u.protocol === 'https:' && CDN_HOSTS.has(u.hostname);
+    } catch {
+        return false;
+    }
+};
+
 export async function handleShare(i: ButtonInteraction) {
     try {
         await i.deferUpdate(); // la vue éphémère reste telle quelle
@@ -37,9 +50,16 @@ export async function handleShare(i: ButtonInteraction) {
         const files: AttachmentBuilder[] = [];
         const reuploaded = new Set<string>();
         for (const att of i.message.attachments.values()) {
+            if (!isDiscordCdn(att.url) || att.size > MAX_ATTACHMENT_BYTES) {
+                logError('SHARE', `Pièce jointe « ${att.name} » ignorée (hôte ou taille non autorisés).`);
+                continue;
+            }
             try {
-                const res = await fetch(att.url);
-                if (!res.ok) continue;
+                const res = await fetch(att.url, { signal: AbortSignal.timeout(10_000) });
+                if (!res.ok) {
+                    await res.body?.cancel().catch(() => {});
+                    continue;
+                }
                 files.push(new AttachmentBuilder(Buffer.from(await res.arrayBuffer()), { name: att.name }));
                 reuploaded.add(att.name);
             } catch (e) {

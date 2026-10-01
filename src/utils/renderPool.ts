@@ -11,9 +11,9 @@
 // Règle de conception : le pool ne doit JAMAIS faire échouer un rendu. Toute
 // défaillance (worker qui ne démarre pas, qui plante ou qui se bloque) retombe
 // sur le rendu synchrone d'origine — plus lent, mais correct.
-import { Worker } from 'worker_threads';
-import * as os from 'os';
-import * as path from 'path';
+import { Worker } from 'node:worker_threads';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { log, logError } from './logger';
 import { renderDayImage, renderWeekImage } from './agendaImage';
 import { renderNotesOverview, renderSubjectCard, Subject } from './notesImage';
@@ -22,9 +22,11 @@ import { renderNotesOverview, renderSubjectCard, Subject } from './notesImage';
 // on s'aligne sur l'extension de ce fichier-ci.
 const WORKER_FILE = path.join(__dirname, `renderWorker${path.extname(__filename)}`);
 
-// Un thread par cœur disponible, sans monopoliser la machine ni dépasser
-// l'utilité réelle (les rendus sont courts).
-const POOL_SIZE = Math.max(1, Math.min(4, os.cpus().length - 1));
+// Deux threads au plus. Chaque worker garde ~100-150 Mo de caches Skia une fois
+// chaud : à 4 workers, le rendu seul dépassait 380 Mo de RAM, de quoi faire
+// tuer le bot (OOM) sur un petit serveur après quelques heures. Un rendu dure
+// ~100 ms, deux threads suffisent largement à la charge d'une promo.
+const POOL_SIZE = Math.max(1, Math.min(2, os.availableParallelism() - 1));
 
 // Filet contre un worker bloqué : au-delà, on le tue et on rejoue le rendu.
 const JOB_TIMEOUT_MS = 15_000;

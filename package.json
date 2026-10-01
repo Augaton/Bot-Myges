@@ -1,18 +1,18 @@
 {
   "name": "botdiscordmyges",
-  "version": "3.3.0",
+  "version": "3.4.0",
   "description": "Bot Discord MyGes (agenda, notes, projets) — multi-serveurs",
   "private": true,
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc -p tsconfig.json",
     "prestart": "npm run build",
-    "start": "node dist/index.js",
+    "start": "node index.js",
     "start:prod": "node dist/index.js",
-    "dev": "node --watch src/index.ts",
+    "dev": "tsc -p tsconfig.json && (tsc -p tsconfig.json --watch & node --watch dist/index.js)",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "npm run build && node --test \"test/*.test.js\""
   },
   "keywords": [],
   "author": "",
@@ -21,12 +21,11 @@
     "node": ">=22.18.0"
   },
   "dependencies": {
-    "@napi-rs/canvas": "^1.0.5",
-    "discord.js": "^14.27.0",
-    "dotenv": "^17.4.2"
+    "@napi-rs/canvas": "^1.0.9",
+    "discord.js": "^14.27.0"
   },
   "devDependencies": {
-    "@types/node": "^26.2.0",
-    "typescript": "^5.9.3"
+    "@types/node": "^26.6.3",
+    "typescript": "^7.0.2"
   }
 }

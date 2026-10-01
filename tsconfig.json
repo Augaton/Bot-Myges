@@ -1,8 +1,10 @@
 {
   "compilerOptions": {
     "target": "ES2023",
-    "module": "commonjs",
-    "moduleResolution": "node",
+    // Sortie CommonJS (pas de "type": "module" dans package.json) avec la
+    // résolution moderne de Node. `node10` a été retiré de TypeScript 7.
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
     "lib": ["ES2023"],
     "types": ["node"],
     "outDir": "./dist",
@@ -14,7 +16,6 @@
     "sourceMap": true,
     "removeComments": false,
     // Interdit la syntaxe TS non effaçable (enum, namespace, parameter properties…).
-    // Garantit que `node src/index.ts` (type stripping natif) reste possible en dev.
     "erasableSyntaxOnly": true
   },
   "include": ["src/**/*"],

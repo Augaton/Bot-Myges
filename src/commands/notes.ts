@@ -3,10 +3,9 @@ import {
     EmbedBuilder, MessageFlags, SlashCommandBuilder, StringSelectMenuBuilder,
 } from 'discord.js';
 import { Command } from '../core/command';
-import { ProfileService } from '../myges/services/profile';
-import { getCurrentYear } from '../config';
-import { sessions } from '../core/store';
+import { getGrades } from '../core/mygesData';
 import { log, logError } from '../utils/logger';
+import { apiErrorMessage, sessionFor } from '../utils/replies';
 import { shareRow, SHARE_ID } from '../utils/share';
 import {
     generalAverage, shortAverage, Subject, subjectColor, subjectEmoji, toSubject,
@@ -23,15 +22,15 @@ const command: Command = {
 
     execute: async (interaction: ChatInputCommandInteraction) => {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-        const token = sessions.get(interaction.user.id);
-        if (!token) return interaction.editReply("❌ Connecte-toi d'abord. (/login)");
+        const token = await sessionFor(interaction);
+        if (!token) return;
 
         let grades: any[];
         try {
-            grades = await ProfileService.getGrades(token, getCurrentYear());
+            grades = await getGrades(interaction.user.id, token);
         } catch (e) {
             logError('NOTES', 'Récupération des notes impossible :', e);
-            return interaction.editReply('❌ Erreur lors de la récupération des notes.');
+            return interaction.editReply(apiErrorMessage(e, 'les notes'));
         }
         if (!grades || grades.length === 0) return interaction.editReply('Aucune note disponible.');
 
@@ -147,30 +146,31 @@ const command: Command = {
         const col = msg.createMessageComponentCollector({ time: 300_000 });
 
         col.on('collect', async (i) => {
-            if (i.user.id !== interaction.user.id) {
-                return i.reply({ content: 'Pas touche !', flags: MessageFlags.Ephemeral });
-            }
-            col.resetTimer(); // tant que l'utilisateur navigue, la session reste ouverte
-            if (i.customId === SHARE_ID) return; // traité par le routeur global
-            await i.deferUpdate();
-
-            if (i.isStringSelectMenu()) {
-                if (i.customId === 'sem') loadSemester(i.values[0]);
-                else if (i.customId === 'subject') {
-                    // Borné : le menu peut dater d'un trimestre plus fourni.
-                    index = Math.min(Math.max(0, Number(i.values[0]) || 0), subjects.length - 1);
-                    view = 'detail';
-                }
-            } else if (i.customId === 'overview') {
-                highlight = index; // on repère d'où l'on vient dans le graphique
-                view = 'overview';
-            } else if (i.customId === 'prev') {
-                index = Math.max(0, index - 1);
-            } else if (i.customId === 'next') {
-                index = Math.min(subjects.length - 1, index + 1);
-            }
-
             try {
+                if (i.user.id !== interaction.user.id) {
+                    await i.reply({ content: 'Pas touche !', flags: MessageFlags.Ephemeral });
+                    return;
+                }
+                col.resetTimer(); // tant que l'utilisateur navigue, la session reste ouverte
+                if (i.customId === SHARE_ID) return; // traité par le routeur global
+                await i.deferUpdate();
+
+                if (i.isStringSelectMenu()) {
+                    if (i.customId === 'sem') loadSemester(i.values[0]);
+                    else if (i.customId === 'subject') {
+                        // Borné : le menu peut dater d'un trimestre plus fourni.
+                        index = Math.min(Math.max(0, Number(i.values[0]) || 0), subjects.length - 1);
+                        view = 'detail';
+                    }
+                } else if (i.customId === 'overview') {
+                    highlight = index; // on repère d'où l'on vient dans le graphique
+                    view = 'overview';
+                } else if (i.customId === 'prev') {
+                    index = Math.max(0, index - 1);
+                } else if (i.customId === 'next') {
+                    index = Math.min(subjects.length - 1, index + 1);
+                }
+
                 await interaction.editReply(await buildView());
             } catch (e) {
                 logError('NOTES', 'Mise à jour de la vue impossible :', e);

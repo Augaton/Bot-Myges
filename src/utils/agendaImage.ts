@@ -132,6 +132,8 @@ function layoutDay(events: Course[]) {
 }
 
 // --- RENDU PRINCIPAL ---
+// Les heures sont lues dans le fuseau du processus, fixé à Europe/Paris au
+// démarrage (voir config.ts) : un serveur en UTC ne décale plus les cours.
 function renderGrid(title: string, subtitle: string, dayDates: Date[], rawCourses: any[]): Buffer {
     ensureFonts();
 
@@ -162,6 +164,9 @@ function renderGrid(title: string, subtitle: string, dayDates: Date[], rawCourse
     const dayHeadH = 52;
     const gutterW = 58;
     const hourH = 72;
+    // Marge sous la dernière ligne horaire : son libellé, centré sur la ligne,
+    // reste ainsi dans le panneau au lieu de déborder en dessous.
+    const gridBottomPad = 14;
     const colGap = 6;
     const nDays = dayDates.length;
     const colW = nDays === 1 ? 560 : 190;
@@ -192,7 +197,7 @@ function renderGrid(title: string, subtitle: string, dayDates: Date[], rawCourse
     const legendH = legendRows * legendRowH;
     const gridTop = headerTop + legendH + 10 + dayHeadH;
     const gridH = (maxH - minH) * hourH;
-    const height = gridTop + gridH + PAD;
+    const height = gridTop + gridH + gridBottomPad + PAD;
 
     const canvas = createCanvas(width, height);
     const ctx = canvas.getContext('2d');
@@ -234,25 +239,40 @@ function renderGrid(title: string, subtitle: string, dayDates: Date[], rawCourse
 
     // Panneau de grille
     ctx.fillStyle = COL.panel;
-    roundRect(ctx, PAD, gridTop - dayHeadH, gridW, dayHeadH + gridH, 14);
+    roundRect(ctx, PAD, gridTop - dayHeadH, gridW, dayHeadH + gridH + gridBottomPad, 14);
     ctx.fill();
 
-    // Lignes horaires + labels
-    ctx.textBaseline = 'alphabetic';
+    // Lignes horaires + libellés, centrés verticalement SUR leur ligne : un
+    // cours de 9 h commence exactement à hauteur du libellé « 09h ».
+    ctx.textBaseline = 'middle';
     ctx.textAlign = 'right';
+    ctx.font = `13px ${FONT}`;
+    ctx.lineWidth = 1;
     for (let h = minH; h <= maxH; h++) {
         const y = gridTop + (h - minH) * hourH;
         ctx.strokeStyle = COL.grid;
-        ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(gridLeft, y + 0.5);
+        ctx.moveTo(gridLeft - 4, y + 0.5);
         ctx.lineTo(PAD + gridW, y + 0.5);
         ctx.stroke();
         ctx.fillStyle = COL.faint;
-        ctx.font = `13px ${FONT}`;
-        ctx.fillText(`${String(h).padStart(2, '0')}h`, gridLeft - 10, y + 4);
+        ctx.fillText(`${String(h).padStart(2, '0')}h`, gridLeft - 10, y);
+
+        // Repère discret à la demi-heure (cours de 13h30, 15h45…).
+        if (h < maxH) {
+            const half = y + hourH / 2;
+            ctx.save();
+            ctx.setLineDash([3, 5]);
+            ctx.strokeStyle = hexToRgba(COL.grid, 0.6);
+            ctx.beginPath();
+            ctx.moveTo(gridLeft, half + 0.5);
+            ctx.lineTo(PAD + gridW, half + 0.5);
+            ctx.stroke();
+            ctx.restore();
+        }
     }
     ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
 
     // En-têtes de jour + cours
     const now = new Date();
@@ -310,20 +330,23 @@ function renderGrid(title: string, subtitle: string, dayDates: Date[], rawCourse
         }
     });
 
-    // Ligne "maintenant"
-    if (dayDates.some((d) => sameDay(d, now))) {
+    // Ligne "maintenant", limitée à la colonne du jour : sur toute la largeur,
+    // elle laissait croire que l'heure courante valait pour toute la semaine.
+    const todayIdx = dayDates.findIndex((d) => sameDay(d, now));
+    if (todayIdx !== -1) {
         const nowMin = now.getHours() * 60 + now.getMinutes() - minH * 60;
         if (nowMin >= 0 && nowMin <= (maxH - minH) * 60) {
             const y = gridTop + (nowMin / 60) * hourH;
+            const x0 = gridLeft + todayIdx * colW;
             ctx.strokeStyle = COL.now;
             ctx.lineWidth = 2;
             ctx.beginPath();
-            ctx.moveTo(gridLeft, y);
-            ctx.lineTo(PAD + gridW, y);
+            ctx.moveTo(x0, y);
+            ctx.lineTo(x0 + colW, y);
             ctx.stroke();
             ctx.fillStyle = COL.now;
             ctx.beginPath();
-            ctx.arc(gridLeft, y, 4, 0, Math.PI * 2);
+            ctx.arc(x0, y, 4, 0, Math.PI * 2);
             ctx.fill();
         }
     }

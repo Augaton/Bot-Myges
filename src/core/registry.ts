@@ -17,10 +17,12 @@ import changelog from '../commands/changelog';
 import help from '../commands/help';
 import ping from '../commands/ping';
 import config from '../commands/config';
+import alertes from '../commands/alertes';
+import exportIcs from '../commands/export';
 
 // Ordre conservé pour l'affichage dans Discord.
 const all: Command[] = [
-    login, logout, prochain, agenda, notes, absences, projets, profil,
+    login, logout, alertes, prochain, agenda, exportIcs, notes, absences, projets, profil,
     news, profs, trombi, campus, changelog, help, ping, config,
 ];
 

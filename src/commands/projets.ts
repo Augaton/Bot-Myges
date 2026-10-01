@@ -1,10 +1,9 @@
 import { ChatInputCommandInteraction, EmbedBuilder, MessageFlags, SlashCommandBuilder } from 'discord.js';
 import { Command } from '../core/command';
-import { ProjectService } from '../myges/services/project';
-import { getCurrentYear } from '../config';
-import { sessions } from '../core/store';
+import { getProjects } from '../core/mygesData';
 import { getNextStep, snippet } from '../utils/format';
 import { logError } from '../utils/logger';
+import { apiErrorMessage, sessionFor } from '../utils/replies';
 import { shareRow } from '../utils/share';
 
 const command: Command = {
@@ -14,11 +13,11 @@ const command: Command = {
 
     execute: async (interaction: ChatInputCommandInteraction) => {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-        const token = sessions.get(interaction.user.id);
-        if (!token) return interaction.editReply('❌ Connecte-toi.');
+        const token = await sessionFor(interaction);
+        if (!token) return;
 
         try {
-            const projects = (await ProjectService.getProjects(token, getCurrentYear())) || [];
+            const projects = await getProjects(interaction.user.id, token);
             const now = Date.now();
 
             // On ne garde que les projets ayant une étape future
@@ -66,7 +65,7 @@ const command: Command = {
             await interaction.editReply({ embeds: [embed], components: [shareRow()] });
         } catch (e) {
             logError('PROJETS', 'Récupération des projets impossible :', e);
-            await interaction.editReply('❌ Erreur lors de la récupération des projets.');
+            await interaction.editReply(apiErrorMessage(e, 'les projets'));
         }
     },
 };

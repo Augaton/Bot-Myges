@@ -46,12 +46,15 @@ export async function fetchPhotoBuffer(
         // navigation dans le trombinoscope.
         let response = await fetch(photoUrl, { signal: AbortSignal.timeout(10_000) });
         if (!response.ok) {
+            // Corps non lu = connexion retenue : on le libère avant de rejouer.
+            await response.body?.cancel().catch(() => {});
             response = await fetch(photoUrl, {
                 headers: { Authorization: `${token.token_type} ${token.access_token}` },
                 signal: AbortSignal.timeout(10_000),
             });
         }
         if (response.ok) buffer = Buffer.from(await response.arrayBuffer());
+        else await response.body?.cancel().catch(() => {});
     } catch (e) {
         logError('PHOTO', 'Téléchargement de la photo impossible :', e);
     }

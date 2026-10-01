@@ -1,8 +1,7 @@
-import { Client, EmbedBuilder, TextChannel } from 'discord.js';
-import { ProjectService } from '../myges/services/project';
-import { getCurrentYear } from '../config';
-import { getGuildConfig, loadData, saveData, sessions } from '../core/store';
-import { getNextStep } from '../utils/format';
+import { Client, EmbedBuilder } from 'discord.js';
+import { getProjects } from '../core/mygesData';
+import { getGuildConfig, getSession, hasAccount, loadData, saveData } from '../core/store';
+import { getNextStep, snippet } from '../utils/format';
 import { log, logError } from '../utils/logger';
 
 // Garde-fou anti-chevauchement, partagé par TOUS les appelants (tâche horaire
@@ -44,7 +43,7 @@ export async function checkNewProjects(client: Client) {
             log('PROJET', `Serveur ${guildId} : configuration incomplète (/config), ignoré.`);
             continue;
         }
-        if (!sessions.has(cfg.referenceUserId)) {
+        if (!hasAccount(cfg.referenceUserId)) {
             log('PROJET', `Serveur ${guildId} : compte de référence ${cfg.referenceUserId} non connecté, ignoré.`);
             continue;
         }
@@ -64,10 +63,14 @@ export async function checkNewProjects(client: Client) {
         if (!firstCall) await new Promise((r) => setTimeout(r, 5000));
         firstCall = false;
 
-        const token = sessions.get(userId);
+        const token = await getSession(userId);
+        if (!token) {
+            log('PROJET', `Compte ${userId} : session MyGes indisponible, vérification reportée.`);
+            continue;
+        }
         let projects: any[];
         try {
-            projects = (await ProjectService.getProjects(token, getCurrentYear())) || [];
+            projects = await getProjects(userId, token);
         } catch (e) {
             logError('PROJET', `Compte ${userId} : récupération des projets impossible :`, e);
             continue;
@@ -77,9 +80,9 @@ export async function checkNewProjects(client: Client) {
         // 3. Diffusion sur chaque serveur, avec son propre historique.
         for (const guildId of guilds) {
             const cfg = getGuildConfig(data, guildId);
-            const channel = (await client.channels.fetch(cfg.announcementChannelId!).catch(() => null)) as TextChannel;
-            if (!channel) {
-                logError('PROJET', `Serveur ${guildId} : salon d'alertes ${cfg.announcementChannelId} introuvable.`);
+            const channel = await client.channels.fetch(cfg.announcementChannelId!).catch(() => null);
+            if (!channel?.isSendable()) {
+                logError('PROJET', `Serveur ${guildId} : salon d'alertes ${cfg.announcementChannelId} introuvable ou inaccessible.`);
                 continue;
             }
 
@@ -98,7 +101,7 @@ export async function checkNewProjects(client: Client) {
                     .addFields(
                         { name: 'Nom', value: String(p.name || 'Sans titre').slice(0, 1024), inline: true },
                         { name: `📅 ${typeStep}`, value: dateStr, inline: true },
-                        { name: 'Objectif', value: p.project_teaching_goals ? p.project_teaching_goals.substring(0, 500) : 'Voir MyGes' }
+                        { name: 'Objectif', value: snippet(p.project_teaching_goals, 500) || 'Voir MyGes' }
                     )
                     .setFooter({ text: 'Alerte MyGes' })
                     .setTimestamp();
