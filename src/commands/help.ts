@@ -16,7 +16,7 @@ const command: Command = {
             .setColor(0x5865f2)
             .setThumbnail(interaction.client.user?.displayAvatarURL() || null)
             .addFields(
-                { name: '🔐 Gestion du Compte', value: '` /login ` : Se connecter (via formulaire sécurisé)\n` /logout ` : Se déconnecter\n` /profil ` : Voir mon profil étudiant\n` /alertes ` : Notes et rappels de rendus en MP' },
+                { name: '🔐 Gestion du Compte', value: '` /login ` : Se connecter (via formulaire sécurisé)\n` /logout ` : Se déconnecter\n` /profil ` : Voir mon profil étudiant\n` /alertes ` : Notes, rendus et changements d\'agenda en MP' },
                 { name: '📅 Organisation', value: '` /agenda ` : Emploi du temps de la semaine\n` /export ` : Emploi du temps en .ics (Google Agenda, iPhone…)\n` /prochain ` : Le prochain cours à venir (Compte à rebours)\n` /projets ` : Liste des projets et deadlines' },
                 { name: '🎓 Scolarité', value: '` /notes ` : Bulletin de notes et moyennes\n` /absences ` : Liste des absences' },
                 { name: "🏫 Vie de l'École", value: '` /trombi ` : Voir les élèves de ta classe\n` /profs ` : Liste et emails de tes intervenants\n` /campus ` : Codes d\'accès et adresses\n` /news ` : Actualités de l\'école' },

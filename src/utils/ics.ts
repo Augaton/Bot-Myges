@@ -1,6 +1,6 @@
 // Export de l'emploi du temps au format iCalendar (RFC 5545), importable dans
 // Google Agenda, Apple Calendrier, Outlook, etc.
-import { courseName, formatCampus } from './format';
+import { courseName, coursePlace } from './format';
 
 const CRLF = '\r\n';
 
@@ -67,15 +67,7 @@ export function buildIcs(courses: any[], now = new Date()): string {
         if (seen.has(uid)) continue;
         seen.add(uid);
 
-        const rooms: any[] = Array.isArray(c.rooms) ? c.rooms : [];
-        const distanciel = c.modality === 'Distanciel' || rooms.some((r) => String(r?.name ?? '').toLowerCase().includes('distanciel'));
-        let location = '';
-        if (distanciel) location = 'Distanciel';
-        else if (rooms.length) {
-            location = rooms.map((r) => r?.name).filter(Boolean).join(', ');
-            const campus = formatCampus(rooms[0]?.campus || '');
-            if (campus) location += ` (${campus})`;
-        }
+        const location = coursePlace(c);
         const description = [
             c.teacher && `Intervenant : ${c.teacher}`,
             c.modality && `Modalité : ${c.modality}`,

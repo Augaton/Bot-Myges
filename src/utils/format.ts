@@ -33,6 +33,22 @@ export function courseName(raw: any): string {
     return String(raw?.name || 'Cours').replace(/^T\d+\s-\s/i, '').trim();
 }
 
+/**
+ * Lieu d'un cours : « Distanciel », ou ses salles suivies du campus
+ * (« Salle 12 (Nation 1) »). Vide tant qu'aucune salle n'est attribuée.
+ */
+export function coursePlace(raw: any): string {
+    const rooms: any[] = Array.isArray(raw?.rooms) ? raw.rooms : [];
+    if (raw?.modality === 'Distanciel' || rooms.some((r) => String(r?.name ?? '').toLowerCase().includes('distanciel'))) {
+        return 'Distanciel';
+    }
+    // Triées : un ordre qui varie d'une lecture à l'autre n'est pas un changement de salle.
+    const names = rooms.map((r) => String(r?.name ?? '')).filter(Boolean).sort((a, b) => a.localeCompare(b, 'fr')).join(', ');
+    if (!names) return '';
+    const campus = formatCampus(rooms[0]?.campus || '');
+    return campus ? `${names} (${campus})` : names;
+}
+
 export function formatToFrenchTime(date: Date): string {
     return date.toLocaleTimeString('fr-FR', {
         hour: '2-digit',
