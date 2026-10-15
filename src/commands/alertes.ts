@@ -10,7 +10,7 @@ import { log, logError } from '../utils/logger';
 const command: Command = {
     data: new SlashCommandBuilder()
         .setName('alertes')
-        .setDescription('Gérer tes alertes en MP : nouvelles notes et rappels de rendus'),
+        .setDescription('Gérer tes alertes en MP : notes, rendus, changements d\'agenda, programme du matin'),
 
     execute: async (interaction: ChatInputCommandInteraction) => {
         const userId = interaction.user.id;
@@ -38,21 +38,35 @@ const command: Command = {
                             ? '✅ Activés : un MP la veille (24 h avant) et 2 h avant chaque échéance de projet.'
                             : '❌ Désactivés',
                     },
+                    {
+                        name: '🗓️ Changements d\'agenda',
+                        value: alerts.agenda
+                            ? '✅ Activés : un MP si un cours de la semaine à venir est annulé, déplacé, ajouté ou change de salle (vérifié toutes les heures).'
+                            : '❌ Désactivés',
+                    },
+                    {
+                        name: '☀️ Programme du matin',
+                        value: alerts.digest
+                            ? '✅ Activé : chaque matin vers 7 h, un MP avec tes cours du jour.'
+                            : '❌ Désactivé',
+                    },
                 )
                 .setFooter({ text: 'Rien reçu ? Vérifie que tu acceptes les MP des membres du serveur.' });
 
-            const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-                new ButtonBuilder()
-                    .setCustomId('alert_grades')
-                    .setLabel(alerts.grades ? '📝 Désactiver les notes' : '📝 Activer les notes')
-                    .setStyle(alerts.grades ? ButtonStyle.Secondary : ButtonStyle.Success),
-                new ButtonBuilder()
-                    .setCustomId('alert_reminders')
-                    .setLabel(alerts.reminders ? '⏰ Désactiver les rappels' : '⏰ Activer les rappels')
-                    .setStyle(alerts.reminders ? ButtonStyle.Secondary : ButtonStyle.Success),
+            const toggle = (id: string, on: boolean, icon: string, what: string) => new ButtonBuilder()
+                .setCustomId(id)
+                .setLabel(`${icon} ${on ? 'Désactiver' : 'Activer'} ${what}`)
+                .setStyle(on ? ButtonStyle.Secondary : ButtonStyle.Success);
+            const toggles = new ActionRowBuilder<ButtonBuilder>().addComponents(
+                toggle('alert_grades', alerts.grades, '📝', 'les notes'),
+                toggle('alert_reminders', alerts.reminders, '⏰', 'les rappels'),
+                toggle('alert_agenda', alerts.agenda, '🗓️', 'l\'agenda'),
+                toggle('alert_digest', alerts.digest, '☀️', 'le matin'),
+            );
+            const test = new ActionRowBuilder<ButtonBuilder>().addComponents(
                 new ButtonBuilder().setCustomId('alert_test').setLabel('📨 Tester les MP').setStyle(ButtonStyle.Primary),
             );
-            return { embeds: [embed], components: [row] };
+            return { embeds: [embed], components: [toggles, test] };
         };
 
         const msg = await interaction.editReply(view());
@@ -94,9 +108,17 @@ const command: Command = {
                     }
                 } else if (i.customId === 'alert_reminders') {
                     alerts.reminders = !alerts.reminders;
+                } else if (i.customId === 'alert_agenda') {
+                    alerts.agenda = !alerts.agenda;
+                    // Même logique que les notes : à la réactivation, l'agenda est
+                    // relu sans signaler ce qui a changé entre-temps.
+                    if (!alerts.agenda) delete alerts.agendaSnapshot;
+                } else if (i.customId === 'alert_digest') {
+                    alerts.digest = !alerts.digest;
                 }
                 saveData(data);
-                log('ALERTES', `${userId} : notes ${alerts.grades ? 'on' : 'off'}, rappels ${alerts.reminders ? 'on' : 'off'}`);
+                const state = (on: boolean) => (on ? 'on' : 'off');
+                log('ALERTES', `${userId} : notes ${state(alerts.grades)}, rappels ${state(alerts.reminders)}, agenda ${state(alerts.agenda)}, matin ${state(alerts.digest)}`);
                 await i.update(view());
             } catch (e) {
                 logError('ALERTES', 'Mise à jour du panneau impossible :', e);

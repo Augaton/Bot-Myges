@@ -30,11 +30,17 @@ export interface GuildConfig {
 export interface UserAlerts {
     grades: boolean; // MP à chaque nouvelle note
     reminders: boolean; // MP la veille et 2 h avant chaque rendu
+    agenda: boolean; // MP si un cours à venir est annulé, déplacé, ajouté ou change de salle
+    digest: boolean; // MP chaque matin avec les cours du jour
     gradesYear?: string; // année scolaire des notes mémorisées
+    gradeIdFormat?: number; // format des identifiants de notes (voir tasks/personalAlerts)
     // Empreintes (HMAC) des notes déjà signalées : aucune note n'est stockée en clair.
     knownGrades?: string[];
     // Rappels déjà envoyés → échéance (ms), purgés une fois l'échéance passée.
     reminded?: Record<string, number>;
+    // Cours à venir lors de la dernière lecture de l'agenda, chiffrés.
+    agendaSnapshot?: EncryptedData;
+    digestSentOn?: string; // jour (AAAA-MM-JJ) du dernier programme du matin
 }
 
 export interface SavedData {
@@ -129,8 +135,24 @@ export function loadData(): SavedData {
  * par défaut). L'objet fait partie de `data` : le modifier puis saveData suffit.
  */
 export function getUserAlerts(data: SavedData, userId: string): UserAlerts {
-    data.alerts[userId] ??= { grades: true, reminders: true };
-    return data.alerts[userId];
+    const alerts = (data.alerts[userId] ??= { grades: true, reminders: true, agenda: true, digest: false });
+    // Préférences apparues en v3.5 : valeurs par défaut pour les comptes existants.
+    alerts.agenda ??= true;
+    alerts.digest ??= false; // programme du matin : uniquement sur demande
+    return alerts;
+}
+
+/**
+ * Oublie ce que les alertes ont déjà vu (notes, rappels, agenda) en gardant les
+ * préférences : au passage suivant, tout est réamorcé sans MP.
+ */
+export function resetAlertHistory(alerts: UserAlerts) {
+    delete alerts.gradesYear;
+    delete alerts.gradeIdFormat;
+    delete alerts.knownGrades;
+    delete alerts.reminded;
+    delete alerts.agendaSnapshot;
+    delete alerts.digestSentOn;
 }
 
 /**

@@ -92,11 +92,28 @@ Toutes les 15 min, le bot vérifie pour chaque utilisateur connecté (au plus un
 lecture MyGes par heure et par personne) :
 
 - les **nouvelles notes** → MP (premier passage silencieux : l'historique n'est pas envoyé) ;
-- les **échéances de projets** → MP 24 h puis 2 h avant.
+- les **échéances de projets** → MP 24 h puis 2 h avant ;
+- les **changements d'agenda** sur la semaine à venir (cours annulé, déplacé,
+  ajouté, changement de salle) → MP (premier passage silencieux, lui aussi) ;
+- le **programme du matin** → MP vers 7 h avec les cours du jour (désactivé par défaut).
 
-Chacun règle ses alertes avec `/alertes` (activées par défaut). Les notes déjà
-vues sont mémorisées sous forme d'empreintes HMAC, jamais en clair. Aucun
-intent Discord supplémentaire n'est nécessaire pour envoyer des MP.
+Chacun règle ses alertes avec `/alertes` (toutes activées par défaut, sauf le
+programme du matin). Les notes déjà vues sont mémorisées sous forme d'empreintes
+HMAC, jamais en clair ; les cours à venir déjà vus sont chiffrés comme les
+identifiants. Aucun intent Discord supplémentaire n'est nécessaire pour envoyer des MP.
+
+## Journaux
+
+- Sous **systemd** : `journalctl -u botmyges` (voir plus bas).
+- Avec **`npm start`** (superviseur intégré) : la sortie du bot est aussi écrite
+  dans `logs/bot-AAAA-MM-JJ.log` (heure de Paris), un fichier par jour, 14 jours
+  conservés. `tail -f logs/bot-$(date +%F).log` pour suivre en direct.
+  Comme `saved_data.json`, ils ne sont lisibles que par le compte du bot
+  (dossier 700, fichiers 600). Les identifiants MyGes saisis lors d'un échec de
+  `/login` n'y figurent jamais en clair, ni les jetons d'interaction Discord.
+
+En cas de crash ou de lenteur, les lignes utiles sont `[SANTÉ]` (RAM, chaque
+heure), `[DISCORD] Passerelle…`, `[MYGES] … nouvelle tentative` et `[SUPERVISEUR]`.
 
 ## Codes d'accès des campus (`campus.json`)
 

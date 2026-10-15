@@ -4,7 +4,7 @@ import {
     ActivityType, Client, Events, GatewayIntentBits, MessageFlags, Options, Status,
 } from 'discord.js';
 import { commands, commandsJSON } from './core/registry';
-import { loadData, sessionCount } from './core/store';
+import { loadData, saveData, sessionCount } from './core/store';
 import { handleLoginModal, LOGIN_MODAL_ID } from './commands/login';
 import { runProjectCheck } from './tasks/projects';
 import { PERSONAL_CHECK_INTERVAL, runPersonalCheck } from './tasks/personalAlerts';
@@ -118,6 +118,21 @@ function logHealth() {
     );
 }
 
+/** Oublie la configuration d'un serveur que le bot a quitté (expulsé, serveur supprimé…). */
+function forgetGuild(guildId: string) {
+    const data = loadData();
+    if (!data.guilds[guildId]) return;
+    delete data.guilds[guildId];
+    saveData(data);
+    log('CONFIG', `Serveur ${guildId} quitté : configuration supprimée.`);
+}
+
+// Une simple panne d'un serveur Discord émet GuildUnavailable, pas cet
+// évènement : sa configuration est alors conservée. Volontairement, rien n'est
+// supprimé au démarrage pour les serveurs absents : un bot lancé avec un autre
+// token sur le même saved_data.json effacerait la config de tous les autres.
+client.on(Events.GuildDelete, (guild) => forgetGuild(guild.id));
+
 // --- INIT ---
 client.once(Events.ClientReady, async (ready) => {
     log('BOOT', `Bot connecté : ${ready.user.tag} (${BOT_VERSION}) · Node ${process.version} · fuseau ${process.env.TZ}`);
@@ -142,8 +157,11 @@ client.once(Events.ClientReady, async (ready) => {
     // 4. Tâches de fond. Les sessions MyGes ne sont plus rouvertes en bloc au
     // démarrage : chacune est rétablie à la demande, au premier usage.
     timers.push(
+        // Alertes projets : premier passage 1 min après le démarrage. Attendre
+        // une heure pleine en priverait un bot qui redémarre plus souvent.
+        setTimeout(() => runProjectCheck(client), 60_000),
         setInterval(() => runProjectCheck(client), CHECK_INTERVAL),
-        // Alertes en MP (notes, rappels) : premier passage 2 min après le
+        // Alertes en MP (notes, rappels, agenda) : premier passage 2 min après le
         // démarrage, le temps que la passerelle se stabilise.
         setTimeout(() => runPersonalCheck(client), 2 * 60_000),
         setInterval(() => runPersonalCheck(client), PERSONAL_CHECK_INTERVAL),

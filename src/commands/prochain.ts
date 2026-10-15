@@ -1,7 +1,7 @@
 import { ChatInputCommandInteraction, EmbedBuilder, MessageFlags, SlashCommandBuilder } from 'discord.js';
 import { Command } from '../core/command';
 import { TimetableService } from '../myges/services/timetable';
-import { formatCampus, formatToFrenchTime } from '../utils/format';
+import { coursePlace, formatToFrenchTime } from '../utils/format';
 import { logError } from '../utils/logger';
 import { apiErrorMessage, sessionFor } from '../utils/replies';
 import { shareRow } from '../utils/share';
@@ -33,17 +33,9 @@ const command: Command = {
             const dateFin = new Date(c.end_date);
             const nomCours = String(c.name || 'Cours').replace(/^T\d+\s-\s/i, '');
 
-            let salle = 'Non défini';
-            let icon = '🏫';
-
-            if (c.modality === 'Distanciel' || (c.rooms && c.rooms.some((r: any) => String(r?.name ?? '').toLowerCase().includes('distanciel')))) {
-                salle = 'Distanciel';
-                icon = '🏠';
-            } else if (c.rooms && c.rooms.length > 0) {
-                salle = c.rooms.map((r: any) => r.name).join(', ');
-                const rawCampus = c.rooms[0].campus;
-                if (rawCampus) salle += ` (${formatCampus(rawCampus)})`;
-            }
+            const place = coursePlace(c);
+            const salle = place || 'Non défini';
+            const icon = place === 'Distanciel' ? '🏠' : '🏫';
 
             const timestamp = Math.floor(dateDebut.getTime() / 1000);
 

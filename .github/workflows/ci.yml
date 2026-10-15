@@ -1,0 +1,36 @@
+# Compilation (vérification de types comprise) et tests à chaque push sur main
+# et à chaque pull request. Testé sur la version minimale prise en charge
+# (engines) et sur celle du .nvmrc.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Lecture seule : la CI n'a rien à écrire dans le dépôt.
+permissions:
+  contents: read
+
+# Un nouveau push annule la vérification encore en cours sur la même branche.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: ['22', '26']
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Le jeton GitHub n'a pas à rester accessible aux scripts npm.
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm test
