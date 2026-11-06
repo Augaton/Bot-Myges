@@ -4,6 +4,7 @@ import {
 } from 'discord.js';
 import { Command } from '../core/command';
 import { GesAPI } from '../myges/ges-api';
+import { accountKey, VALID_USERNAME } from '../myges/identifier';
 import { BadCredentialsError, MyGesError } from '../myges/errors';
 import { decrypt, encrypt, fingerprint } from '../crypto';
 import { loadData, openSession, resetAlertHistory, saveData } from '../core/store';
@@ -54,14 +55,6 @@ function throttle(keys: string[]): number {
 function forgive(keys: string[]) {
     for (const key of keys) attempts.get(key)?.pop();
 }
-
-// En authentification Basic, tout ce qui suit le premier « : » est le mot de passe.
-// « cible:essai » viserait donc « cible » tout en comptant les tentatives sur un
-// identifiant chaque fois différent, ce qui contournerait la limite ci-dessus.
-const VALID_USERNAME = /^[^\s:\p{Cc}]+$/u;
-
-/** Forme canonique d'un identifiant MyGes : « P.Nom » et « p.nom » sont un même compte. */
-const accountKey = (username: string) => username.normalize('NFKC').toLowerCase();
 
 /** Vrai si les identifiants enregistrés sont ceux du même compte MyGes. */
 function sameAccount(creds: SavedData['users'][string], username: string): boolean {

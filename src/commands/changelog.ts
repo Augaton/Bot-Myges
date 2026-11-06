@@ -8,42 +8,45 @@ import { shareRow } from '../utils/share';
  * Partagé entre la commande `/changelog` et l'annonce automatique de MAJ.
  */
 export function buildChangelogEmbed(client: Client): EmbedBuilder {
+    // Annonce publique : le lien du panel n'y figure que s'il a été renseigné.
+    const url = process.env.PANEL_PUBLIC_URL ?? '';
+    const panelLink = url.startsWith('https://') ? url : '';
     return new EmbedBuilder()
-        .setTitle(`🚀 Mise à jour ${BOT_VERSION} - "Tes documents sur Discord"`)
-        .setDescription('Tes **supports de cours** et **documents administratifs** arrivent sur Discord, tes **absences** te sont signalées en MP et tes **TP** rejoignent tes projets.')
+        .setTitle(`🚀 Mise à jour ${BOT_VERSION} - "Le panel étudiant"`)
+        .setDescription('MyGes Bot a maintenant son **site web** : ton agenda, tes notes, tes projets et tes documents au même endroit, sur téléphone comme sur ordinateur.')
         .setColor(0x5865f2)
         .setThumbnail(client.user?.displayAvatarURL() || null)
         .addFields(
             {
-                name: '📚 Nouveau : `/documents`',
+                name: '🌐 Nouveau : le panel étudiant',
                 value:
-                    '• Choisis une matière, puis un fichier : je te l\'envoie ici, **visible par toi seul**.\n' +
-                    '• Certificats et bulletins sont dans **Documents administratifs**.',
+                    '• Agenda en grille, notes, absences, projets avec leurs équipes, documents et actualités.\n' +
+                    '• Clique sur un cours pour voir sa salle, son syllabus et ses supports.\n' +
+                    '• Connexion avec ton identifiant MyGES : ton mot de passe sert une seule fois et n\'est **jamais enregistré**.\n' +
+                    '• Service non officiel, sans lien avec MyGES ni le Réseau GES.' +
+                    (panelLink ? `\n• Accès : ${panelLink}` : ''),
             },
             {
-                name: '🚫 Nouveau : absences en MP',
-                value: '• Une absence enregistrée sur MyGes ? Je te préviens par MP (vérifié toutes les heures). Activé par défaut, à couper dans `/alertes`.',
-            },
-            {
-                name: '🧪 Les TP rejoignent les projets',
-                value: '• `/projets` et les rappels de rendus (la veille, puis 2 h avant) comptent maintenant aussi tes **travaux pratiques**.',
+                name: '📚 Sur Discord',
+                value:
+                    '• `/documents` : supports de cours et documents annuels, envoyés visibles par toi seul.\n' +
+                    '• Tes **absences** te sont signalées en MP, à couper dans `/alertes`.\n' +
+                    '• `/projets` et les rappels comptent aussi tes **travaux pratiques**.',
             },
             {
                 name: '🛠️ Corrections',
                 value:
-                    '• `/absences` affiche les **plus récentes d\'abord** et compte celles qui ne sont pas justifiées.\n' +
-                    '• `/news` affiche le résumé des actualités et le vrai total.\n' +
-                    '• Les **accents** ne disparaissent plus des actualités et consignes.\n' +
-                    '• Une réponse vide de MyGes ne s\'affiche plus comme une erreur.\n' +
+                    '• `/prochain` cherche jusqu\'à 6 semaines, pratique en alternance.\n' +
+                    '• `/profil` affiche enfin ta classe, `/news` le texte des actualités, et `/absences` les plus récentes d\'abord.\n' +
+                    '• Les **accents** ne disparaissent plus, et un mot de passe avec `€` ou un emoji fonctionne.\n' +
                     '• Un refus passager de MyGes n\'est plus pris pour un mot de passe changé.',
             },
             {
                 name: '🔐 Sécurité',
                 value:
                     '• `/trombi` et `/profs` ne proposent plus de publier la fiche d\'une personne dans un salon.\n' +
-                    '• `/campus` est réservé aux étudiants qui ont cours sur ces campus, vérifié sur ton agenda MyGes.\n' +
-                    '• **Partager** demande le droit d\'écrire dans le salon.\n' +
-                    '• Un mot de passe contenant `€` ou un emoji fonctionne enfin.',
+                    '• `/campus` est réservé aux étudiants qui ont cours sur ces campus.\n' +
+                    '• **Partager** demande le droit d\'écrire dans le salon.',
             },
             {
                 name: '✅ Aucune action requise',

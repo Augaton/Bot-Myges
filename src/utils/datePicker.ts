@@ -1,6 +1,6 @@
 // Sélecteur de date pour l'agenda : helpers de dates et génération des options
 // des menus déroulants Discord (semaines puis jours).
-import { APISelectMenuOption } from 'discord.js';
+import type { APISelectMenuOption } from 'discord.js';
 
 export const DAY_MS = 86_400_000;
 // Un menu déroulant Discord accepte 25 options : on propose 25 semaines autour

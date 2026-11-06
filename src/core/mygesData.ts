@@ -7,7 +7,8 @@ import { TtlCache } from '../utils/ttlCache';
 import { TimetableService } from '../myges/services/timetable';
 import { ProfileService } from '../myges/services/profile';
 import { ProjectService } from '../myges/services/project';
-import { getCurrentYear } from '../config';
+import { SchoolService } from '../myges/services/school';
+import { getCurrentYear } from '../utils/schoolYear';
 import { logError } from '../utils/logger';
 import type { GesAuthenticationToken } from '../myges/types/auth';
 
@@ -56,6 +57,17 @@ export function forgetUser(userId: string) {
     }
 }
 
+/** Oublie projets et TP lus : après un changement d'équipe, il faut relire MyGes. */
+export function forgetAssignments(userId: string) {
+    for (const kind of ['projects', 'practicals']) {
+        const prefix = `${userId}|${kind}|`;
+        cache.deleteByPrefix(prefix);
+        for (const key of inflight.keys()) {
+            if (key.startsWith(prefix)) inflight.delete(key);
+        }
+    }
+}
+
 export function getTimetable(userId: string, token: GesAuthenticationToken, start: Date, end: Date): Promise<any[]> {
     return cached(userId, `agenda|${start.getTime()}|${end.getTime()}`, TTL_MS.timetable, async () =>
         (await TimetableService.getTimetable(token, start, end)) || []);
@@ -73,6 +85,23 @@ export function getProfile(userId: string, token: GesAuthenticationToken): Promi
 export function getAbsences(userId: string, token: GesAuthenticationToken): Promise<any[]> {
     const year = getCurrentYear();
     return cached(userId, `absences|${year}`, TTL_MS.grades, async () => (await ProfileService.getAbsences(token, year)) || []);
+}
+
+export function getCourses(userId: string, token: GesAuthenticationToken): Promise<any[]> {
+    const year = getCurrentYear();
+    return cached(userId, `courses|${year}`, TTL_MS.profile, async () => (await ProfileService.getCourses(token, year)) || []);
+}
+
+export function getSyllabus(userId: string, token: GesAuthenticationToken, rcId: string): Promise<any> {
+    return cached(userId, `syllabus|${rcId}`, TTL_MS.profile, () => ProfileService.getSyllabus(token, rcId));
+}
+
+export function getEvents(userId: string, token: GesAuthenticationToken): Promise<any[]> {
+    return cached(userId, 'events', TTL_MS.profile, async () => (await SchoolService.getEvents(token)) || []);
+}
+
+export function getNews(userId: string, token: GesAuthenticationToken): Promise<any> {
+    return cached(userId, 'news', TTL_MS.profile, async () => (await SchoolService.getNews(token)) ?? []);
 }
 
 export function getProjects(userId: string, token: GesAuthenticationToken): Promise<any[]> {

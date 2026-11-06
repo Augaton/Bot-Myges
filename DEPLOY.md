@@ -55,6 +55,7 @@ d'`index.js`, ou systemd ci-dessous.
 | `OWNER_IDS` | non | ID(s) Discord du/des propriétaire(s), séparés par des virgules. Peuvent utiliser `/config` sur tout serveur, même sans être admin. Absent ou vide : aucun propriétaire. |
 | `DB_FILE` | non | Fichier de persistance (défaut : `<racine>/saved_data.json`). |
 | `CAMPUS_FILE` | non | Codes d'accès des campus (défaut : `<racine>/campus.json`). |
+| `PANEL_PUBLIC_URL` | non | Adresse `https://` du panel, affichée dans l'annonce de mise à jour. Absente : l'annonce ne donne pas de lien. |
 
 Le `.env` est lu nativement par Node depuis la **racine du projet** (plus de
 dépendance `dotenv`) ; une variable déjà définie dans l'environnement est prioritaire.
@@ -212,6 +213,170 @@ journalctl -u botmyges -f
 - `/ping` affiche la version, l'uptime et la RAM du bot.
 - Les erreurs MyGes passagères (5xx) sont rejouées automatiquement et
   journalisées en `[MYGES] … nouvelle tentative`.
+
+## Panel étudiant
+
+Site web où un étudiant consulte son agenda, ses notes, ses absences, ses projets,
+ses actualités et ses documents. Il se connecte avec son identifiant MyGES : le mot
+de passe sert une seule fois à obtenir un jeton auprès de MyGES, puis il est oublié.
+Rien n'est écrit sur disque, et un redémarrage déconnecte tout le monde.
+
+Seuls les comptes dont MyGES indique le rôle `student` peuvent entrer.
+
+**Le HTTPS est obligatoire.** Sans lui, le mot de passe circulerait en clair. Le panel
+refuse de démarrer sur une adresse joignable depuis le réseau sans certificat, et son
+cookie `Secure` n'est de toute façon pas accepté en HTTP simple.
+
+| Variable | Défaut | Rôle |
+|---|---|---|
+| `PANEL_HOST` | `127.0.0.1` | Adresse d'écoute. `0.0.0.0` pour ouvrir le panel directement sur l'adresse IP. |
+| `PANEL_PORT` | `3000` | Port d'écoute. |
+| `PANEL_TLS_CERT` | absent | Certificat (`fullchain.pem`). Relu toutes les 6 h, sans redémarrage. |
+| `PANEL_TLS_KEY` | absent | Clé privée (`privkey.pem`), en mode 600. |
+| `PANEL_TRUST_PROXY` | absent | `1` uniquement derrière un proxy, pour limiter les essais par visiteur. |
+
+Seules ces variables sont lues dans le `.env` : le processus du panel ne charge ni
+`DISCORD_TOKEN` ni `ENCRYPTION_KEY`. Pour une séparation complète, fais-le tourner
+sous un compte système distinct, sans droit de lecture sur le `.env`.
+
+```bash
+npm run panel           # build + lancement supervisé, journal dans logs/panel-AAAA-MM-JJ.log
+```
+
+Essai en local, sans certificat : `npm run panel`, puis `http://localhost:3000` (et pas
+`127.0.0.1`, seul `localhost` permet le cookie sans HTTPS).
+
+### Sur Pelican (ou Pterodactyl)
+
+Le panel tourne avec le bot, sur un seul serveur Pelican : `node index.js` (ou `npm start`)
+lance les deux, chacun dans son processus, dès que `PANEL_PORT` est renseigné. nginx, sur la
+machine, apporte le HTTPS et une page « indisponible » quand le panel est arrêté.
+
+```
+Navigateur ──HTTPS──> nginx :8443 ──HTTP──> 172.18.0.1:8788 ──> conteneur ──> panel
+```
+
+1. Dans Pelican, ajoute une allocation **`127.0.0.1:8788`** et rattache-la au serveur du bot,
+   en plus de son port principal. Pelican la publie sur l'interface Docker (`172.18.0.1` par
+   défaut), jamais sur l'IP publique : c'est elle qui garde le port privé. Une allocation
+   sur `0.0.0.0` ou sur l'IP publique exposerait le port. Vérifie après démarrage :
+
+```bash
+sudo docker ps --format '{{.Ports}}' | grep 8788   # attendu : 172.18.0.1:8788->8788/tcp
+```
+
+L'adresse affichée (`172.18.0.1` par défaut, parfois `172.19.0.1`) est celle à mettre dans
+nginx. Une erreur ici se voit tout de suite : nginx affiche la page « indisponible ».
+
+2. Ajoute au `.env` du bot. `0.0.0.0` est voulu : `127.0.0.1` serait la boucle locale du
+   conteneur, injoignable pour nginx.
+
+```bash
+PANEL_HOST=0.0.0.0
+PANEL_PORT=8788
+PANEL_TRUST_PROXY=1
+```
+
+3. Obtiens le certificat (étapes 1 à 3 de la section suivante), puis installe nginx :
+
+```bash
+sudo mkdir -p /var/www/panel-myges
+sudo cp deploy/nginx/panel-down.html /var/www/panel-myges/
+sudo cp deploy/nginx/panel.conf /etc/nginx/sites-available/panel-myges   # puis adapte l'adresse
+sudo ln -s /etc/nginx/sites-available/panel-myges /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+4. Démarre le bot, puis vérifie, **depuis une autre machine** :
+
+```bash
+curl -I https://203.0.113.10:8443/    # 200, ou 503 si le panel est arrêté
+curl -m 5 http://203.0.113.10:8788/   # doit échouer : le port ne doit pas être public
+```
+
+Si la seconde commande répond, le port est public : corrige l'allocation. En mode proxy, le
+panel refuse de toute façon ces accès directs (403) et n'affiche pas son formulaire.
+
+### Sur une adresse IP et un port, avec nginx
+
+Let's Encrypt délivre des certificats gratuits pour une adresse IP. Ils durent 6 jours et
+demandent **Certbot 5.4 ou plus**. Si le serveur a une version plus ancienne, ne la remplace
+pas : elle gère peut-être le certificat d'un autre site. Installe la récente à part, avec ses
+propres dossiers, pour que les deux ne se croisent jamais :
+
+```bash
+sudo apt install python3-venv
+sudo python3 -m venv /opt/certbot
+sudo /opt/certbot/bin/pip install --upgrade pip certbot
+/opt/certbot/bin/certbot --version   # 5.4 ou plus
+```
+
+**1. Laisser nginx répondre à Let's Encrypt sur le port 80.** Ce bloc ne concerne que les
+requêtes adressées à l'IP : les sites appelés par leur domaine ne changent pas. Crée
+`/etc/nginx/sites-available/panel-acme`, en remplaçant `203.0.113.10` par l'adresse du serveur :
+
+```nginx
+server {
+    listen 80;
+    server_name 203.0.113.10;
+    location /.well-known/acme-challenge/ { root /var/www/certbot; }
+    location / { return 404; }
+}
+```
+
+```bash
+sudo mkdir -p /var/www/certbot
+sudo ln -s /etc/nginx/sites-available/panel-acme /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+**2. Demander le certificat.** Vérifie les options avec `/opt/certbot/bin/certbot --help`.
+
+```bash
+sudo /opt/certbot/bin/certbot certonly --webroot -w /var/www/certbot \
+  --preferred-profile shortlived --ip-address 203.0.113.10 \
+  --deploy-hook 'systemctl reload nginx' \
+  --config-dir /etc/letsencrypt-ip --work-dir /var/lib/letsencrypt-ip --logs-dir /var/log/letsencrypt-ip
+sudo ls /etc/letsencrypt-ip/live/   # donne le dossier exact du certificat
+```
+
+**3. Automatiser le renouvellement.** Sans lui, le certificat expire en 6 jours. Crée
+`/etc/cron.d/panel-cert`, sur une seule ligne :
+
+```
+17 */6 * * * root /opt/certbot/bin/certbot renew -q --config-dir /etc/letsencrypt-ip --work-dir /var/lib/letsencrypt-ip --logs-dir /var/log/letsencrypt-ip
+```
+
+Puis vérifie que le renouvellement passe :
+
+```bash
+sudo /opt/certbot/bin/certbot renew --dry-run --config-dir /etc/letsencrypt-ip --work-dir /var/lib/letsencrypt-ip --logs-dir /var/log/letsencrypt-ip
+```
+
+**4. Ouvrir le panel sur le port choisi.** Le fichier est dans `deploy/nginx/panel.conf`. Le
+port du panel y est `8788`, sur l'interface Docker `172.18.0.1` ; l'adresse publique est à adapter. Ouvre ensuite le port `8443` dans le pare-feu.
+
+Un sous-domaine de n'importe quel domaine (`panel.exemple.fr`, un enregistrement DNS A
+vers le serveur) donne un certificat de 90 jours et une adresse plus facile à
+reconnaître, sans rien changer au site principal.
+
+Sans nginx, le panel sait aussi servir le HTTPS lui-même : `PANEL_HOST=0.0.0.0`, avec
+`PANEL_TLS_CERT` et `PANEL_TLS_KEY` vers une copie du certificat lisible par son compte.
+
+Sous systemd, duplique le service du bot avec `ExecStart=/usr/bin/node dist/panel/server.js`,
+sans `EnvironmentFile` : les variables du panel sont lues dans le `.env`.
+
+| Limite | Valeur |
+|---|---|
+| Échecs de connexion, par 15 min | 5 par identifiant et par réseau, 20 par réseau, 20 par identifiant, 300 en tout |
+| Connexions réussies | 10 par compte et par 15 min |
+| Session | 3 par compte, 30 min d'inactivité, 12 h au plus, jamais au-delà du jeton MyGES |
+| Requêtes | 120 par minute et par compte |
+| Téléchargements | 1 par compte, 3 en tout, 25 Mo au plus, 5 min au plus |
+
+Un réseau est un /24 en IPv4 et un /64 en IPv6. Ces compteurs vivent en mémoire : un
+redémarrage les remet à zéro. Au-delà de 300 échecs par 15 min, plus personne ne peut
+se connecter jusqu'à la fin de la fenêtre, mais les sessions ouvertes continuent.
 
 ## Déploiement via SFTP
 

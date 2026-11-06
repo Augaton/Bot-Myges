@@ -24,3 +24,18 @@ test('la version affichée suit package.json', () => {
     const { BOT_VERSION } = dist('config.js');
     assert.strictEqual(BOT_VERSION, `v${require('../package.json').version}`);
 });
+
+test('annonce : le lien du panel n\'y figure que s\'il est renseigné, et seulement en https', () => {
+    const { buildChangelogEmbed } = dist('commands/changelog.js');
+    const text = () => JSON.stringify(buildChangelogEmbed({ user: null }).toJSON());
+    const before = process.env.PANEL_PUBLIC_URL;
+    delete process.env.PANEL_PUBLIC_URL;
+    assert.doesNotMatch(text(), /Accès :/);
+    process.env.PANEL_PUBLIC_URL = 'http://exemple.test';
+    assert.doesNotMatch(text(), /exemple\.test/);
+    process.env.PANEL_PUBLIC_URL = 'https://exemple.test:8443';
+    assert.match(text(), /Accès : https:\/\/exemple\.test:8443/);
+    if (before === undefined) delete process.env.PANEL_PUBLIC_URL;
+    else process.env.PANEL_PUBLIC_URL = before;
+    for (const field of buildChangelogEmbed({ user: null }).toJSON().fields) assert.ok(field.value.length <= 1024, field.name);
+});

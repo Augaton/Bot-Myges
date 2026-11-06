@@ -4,6 +4,10 @@
 # Identifiants utilisateurs chiffrés : NE JAMAIS commit
 # (dont le temporaire d'écriture et les copies .bak-avant-scrypt)
 saved_data.json*
+# Certificats HTTPS du panel
+/certs
+*.pem
+*.key
 # Codes d'accès des campus : le dépôt est public, ils ne doivent jamais y figurer
 /campus.json
 # Archives locales du code (src.zip & co) : jamais dans le dépôt

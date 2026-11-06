@@ -231,7 +231,7 @@ test('/config : droits revérifiés à chaque action', () => {
 });
 
 test('nom de fichier : un contrôle bidirectionnel ne déguise pas l\'extension', () => {
-    const { safeFileName } = dist('commands/documents.js');
+    const { safeFileName } = dist('utils/documents.js');
     assert.doesNotMatch(safeFileName('consigne\u202Efdp.exe'), /\u202E/);
     assert.doesNotMatch(safeFileName('a\u200Fb.pdf'), /\u200F/);
 });

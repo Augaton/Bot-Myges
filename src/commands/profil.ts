@@ -1,6 +1,8 @@
 import { ChatInputCommandInteraction, EmbedBuilder, MessageFlags, SlashCommandBuilder } from 'discord.js';
 import { Command } from '../core/command';
+import { getCurrentYear } from '../config';
 import { getProfile } from '../core/mygesData';
+import { SchoolService } from '../myges/services/school';
 import { fullName } from '../utils/format';
 import { logError } from '../utils/logger';
 import { apiErrorMessage, sessionFor } from '../utils/replies';
@@ -17,6 +19,9 @@ const command: Command = {
         if (!token) return;
         try {
             const p = await getProfile(interaction.user.id, token);
+            // La classe n'est pas dans le profil : MyGes la donne par année scolaire.
+            const classes: any = await SchoolService.getMyClasses(token, getCurrentYear()).catch(() => null);
+            const className = Array.isArray(classes) ? classes.map((c: any) => c?.name).filter(Boolean).join(', ') : '';
             // `p.name` porte le nom de famille côté MyGes : on réutilise le
             // helper commun, qui garantit une valeur non vide (Discord refuse
             // un champ d'embed vide et rejette alors toute la réponse).
@@ -26,7 +31,7 @@ const command: Command = {
                 .setThumbnail(p?._links?.photo?.href || null)
                 .addFields(
                     { name: 'Email', value: p?.email || 'Non renseigné' },
-                    { name: 'Classe', value: p?.classes?.map((c: any) => c.name).filter(Boolean).join(', ') || '?' }
+                    { name: 'Classe', value: className || 'Non renseignée' }
                 );
             await interaction.editReply({ embeds: [embed], components: [shareRow()] });
         } catch (e) {

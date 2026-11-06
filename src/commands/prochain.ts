@@ -18,15 +18,15 @@ const command: Command = {
         if (!token) return;
 
         try {
-            // Bornes calées sur minuit : la lecture est stable toute la journée, donc
-            // en cache, et c'est la même que celle des alertes d'agenda.
+            // Bornes calées sur minuit : la lecture est stable toute la journée, donc en
+            // cache. Six semaines : en alternance, le prochain cours peut être loin.
             const start = startOfDay(new Date());
-            const cours = await getTimetable(interaction.user.id, token, start, addDays(start, 8));
+            const cours = await getTimetable(interaction.user.id, token, start, addDays(start, 42));
             const now = Date.now();
             const futurs = cours.filter((c: any) => new Date(c.start_date).getTime() > now);
 
             if (futurs.length === 0) {
-                return interaction.editReply('🎉 Aucun cours prévu dans les 7 prochains jours !');
+                return interaction.editReply('🎉 Aucun cours prévu dans les 6 prochaines semaines !');
             }
             futurs.sort((a: any, b: any) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime());
             const c = futurs[0];

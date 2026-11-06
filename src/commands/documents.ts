@@ -8,7 +8,9 @@ import { FileTooLargeError } from '../myges/errors';
 import { DocumentService } from '../myges/services/document';
 import { ProfileService } from '../myges/services/profile';
 import { limitLifetime, tooManyClicks } from '../utils/collector';
-import { courseName, snippet } from '../utils/format';
+import {
+    acquireDownload, courseSources, DocumentSource, MAX_FILE_BYTES, MygesDocument, releaseDownload, safeFileName, toDocuments,
+} from '../utils/documents';
 import { log, logError } from '../utils/logger';
 import { md } from '../utils/markdown';
 import { apiErrorMessage, sessionFor } from '../utils/replies';
@@ -16,102 +18,14 @@ import { apiErrorMessage, sessionFor } from '../utils/replies';
 // Discord limite un menu déroulant à 25 options.
 const MENU_MAX = 25;
 const ANNUAL = 'annual';
-// Le fichier transite en entier par la RAM du bot : plafond fixe, même sur un
-// serveur boosté où Discord accepterait bien plus.
-const MAX_FILE_BYTES = 25 * 1024 * 1024;
 // Limite d'envoi standard, si Discord n'annonce pas celle du salon. Sans elle,
 // Math.min donnerait NaN et plus aucun plafond ne s'appliquerait.
 const DEFAULT_ATTACHMENT_LIMIT = 10 * 1024 * 1024;
 
-// Un téléchargement occupe jusqu'à MAX_FILE_BYTES de mémoire : au plus un par
-// personne, toutes commandes confondues, et quelques-uns en tout.
-const MAX_PARALLEL_DOWNLOADS = 3;
-const downloading = new Set<string>();
-
-/** Réserve une place de téléchargement ; renvoie le motif du refus s'il n'y en a pas. */
-export function acquireDownload(userId: string): string | null {
-    if (downloading.has(userId)) return '⏳ Un téléchargement est déjà en cours pour toi.';
-    if (downloading.size >= MAX_PARALLEL_DOWNLOADS) return '⏳ Trop de téléchargements en cours. Réessaie dans un instant.';
-    downloading.add(userId);
-    return null;
-}
-
-export function releaseDownload(userId: string) {
-    downloading.delete(userId);
-}
-
-export interface DocumentSource {
-    id: string;
-    name: string;
-    hint: string;
-}
-
-export interface MygesDocument {
-    id: string;
-    title: string;
-    fileName: string;
-    date: number | null;
-}
-
-/** Matières proposées : celles qui annoncent des documents d'abord, sans doublon. */
-export function courseSources(raw: any): DocumentSource[] {
-    if (!Array.isArray(raw)) return [];
-    const byId = new Map<string, { source: DocumentSource; hasDocuments: boolean }>();
-    for (const c of raw) {
-        const id = c?.rc_id ?? c?.rcId ?? c?.id;
-        if (id == null || byId.has(String(id))) continue;
-        byId.set(String(id), {
-            source: { id: String(id), name: courseName(c), hint: String(c?.trimester_name || c?.teacher || '') },
-            hasDocuments: c?.has_documents === true,
-        });
-    }
-    return [...byId.values()]
-        .sort((a, b) => Number(b.hasDocuments) - Number(a.hasDocuments) || a.source.name.localeCompare(b.source.name, 'fr', { numeric: true }))
-        .map((entry) => entry.source);
-}
-
-/** Ajoute l'extension annoncée par MyGes, sauf si le nom la porte déjà ou que c'est un type MIME. */
-function withExtension(name: string, extension: unknown): string {
-    const ext = String(extension ?? '').replace(/^\./, '');
-    if (!/^[a-z0-9]{1,8}$/i.test(ext) || name.toLowerCase().endsWith(`.${ext.toLowerCase()}`)) return name;
-    return `${name}.${ext}`;
-}
-
-/**
- * Documents d'une réponse MyGes, du plus récent au plus ancien : un tableau
- * pour les supports de cours, parfois { annualDocuments, documents } pour les
- * documents administratifs. Une entrée sans identifiant ne peut pas être téléchargée.
- */
-export function toDocuments(payload: any): MygesDocument[] {
-    const raw: any[] = Array.isArray(payload)
-        ? payload
-        : [payload?.annualDocuments, payload?.documents].filter(Array.isArray).flat();
-    const byId = new Map<string, MygesDocument>();
-    for (const d of raw) {
-        const id = d?.oc_id ?? d?.id ?? d?.document_id;
-        if (id == null) continue;
-        const title = snippet(String(d?.label || d?.title || d?.name || d?.filename || ''), 100) || 'Document';
-        byId.set(String(id), {
-            id: String(id),
-            title,
-            fileName: withExtension(String(d?.filename || title), d?.extension),
-            date: new Date(d?.update_date ?? d?.date ?? d?.last_update).getTime() || null,
-        });
-    }
-    return [...byId.values()].sort((a, b) => (b.date ?? 0) - (a.date ?? 0));
-}
-
-/** Nom de fichier sûr : il vient de MyGes (ou de ses en-têtes), pas de nous. */
-export function safeFileName(name: string): string {
-    const clean = name.normalize('NFC').replace(/[\\/:*?"<>|\p{Cc}\p{Cf}]/gu, ' ').replace(/\s+/g, ' ').trim().replace(/^[.\s]+/, '');
-    // Tronqué par le début : l'extension importe plus que le début du titre.
-    return clean.slice(-100) || 'document';
-}
-
 const command: Command = {
     data: new SlashCommandBuilder()
         .setName('documents')
-        .setDescription('Télécharger tes supports de cours et documents administratifs'),
+        .setDescription('Télécharger tes supports de cours et les documents annuels'),
 
     execute: async (interaction: ChatInputCommandInteraction) => {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -127,7 +41,7 @@ const command: Command = {
             return interaction.editReply(apiErrorMessage(e, 'la liste de tes matières'));
         }
         const sources: DocumentSource[] = [
-            { id: ANNUAL, name: 'Documents administratifs', hint: 'Certificats, bulletins…' },
+            { id: ANNUAL, name: 'Documents annuels', hint: 'Calendriers, informations générales…' },
             ...courses,
         ].slice(0, MENU_MAX);
 
@@ -138,14 +52,13 @@ const command: Command = {
 
         const describe = () => {
             if (notice) return notice;
-            if (!selected) return 'Choisis une matière, ou tes documents administratifs. Le fichier t\'est envoyé ici, visible par toi seul.';
+            if (!selected) return 'Choisis une matière, ou les documents annuels. Le fichier t\'est envoyé ici, visible par toi seul.';
             if (!files.length) return `Aucun document pour **${md(selected.name)}**.`;
             const count = files.length > MENU_MAX ? `les ${MENU_MAX} plus récents sur ${files.length}` : `${files.length} document${files.length > 1 ? 's' : ''}`;
             return `**${md(selected.name)}** · ${count}. Choisis un fichier pour le recevoir.`;
         };
 
-        // Volontairement sans bouton « Partager » : certificats et bulletins
-        // contiennent des données personnelles.
+        // Volontairement sans bouton « Partager » : ces fichiers restent ceux de l'école.
         const view = () => {
             const rows = [
                 new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
@@ -170,7 +83,7 @@ const command: Command = {
                             .addOptions(files.slice(0, MENU_MAX).map((d) => ({
                                 label: d.title.slice(0, 100),
                                 value: d.id,
-                                description: d.date ? new Date(d.date).toLocaleDateString('fr-FR') : undefined,
+                                description: [d.category, d.date && new Date(d.date).toLocaleDateString('fr-FR')].filter(Boolean).join(', ').slice(0, 100) || undefined,
                             })))
                     )
                 );

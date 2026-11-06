@@ -11,7 +11,7 @@ export class DocumentService extends BaseService {
     return this.download(credentials, `/me/${encodeURIComponent(rcId)}/files/${encodeURIComponent(fileId)}`, maxBytes);
   }
 
-  /** Documents administratifs de l'année (certificats, bulletins…). */
+  /** Documents annuels de l'école (calendriers, informations générales…). */
   static getAnnualDocuments(credentials: GesAuthenticationToken, year: string) {
     return this.get(credentials, `/me/${year}/annualDocuments`);
   }

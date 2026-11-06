@@ -1,6 +1,7 @@
 import { GesAuthenticationToken } from '../types/auth';
 import { FileTooLargeError, MyGesError } from '../errors';
 import { log } from '../../utils/logger';
+import { fetchTrusted } from '../trusted';
 
 export interface RequestConfig {
   headers?: Record<string, string>;
@@ -144,7 +145,7 @@ export abstract class BaseService {
       const usedToken = credentials.access_token;
       let response: Response;
       try {
-        response = await fetch(`${API_URL}${url}`, {
+        response = await fetchTrusted(`${API_URL}${url}`, {
           method,
           headers: {
             'Content-Type': 'application/json',
@@ -156,7 +157,7 @@ export abstract class BaseService {
         });
       } catch (e: any) {
         // Réseau coupé ou délai dépassé : rejouable pour une lecture uniquement.
-        if (idempotent && canRetry(attempt)) {
+        if (!(e instanceof MyGesError) && idempotent && canRetry(attempt)) {
           log('MYGES', `${method} ${url} : ${e?.name ?? 'erreur réseau'}, nouvelle tentative (${attempt}/${MAX_ATTEMPTS - 1})`);
           await sleep(backoff(attempt, null));
           continue;

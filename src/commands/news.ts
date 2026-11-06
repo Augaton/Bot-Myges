@@ -31,7 +31,7 @@ const command: Command = {
                 .setTitle("📰 Actualités de l'école")
                 .setColor(0x00aeef)
                 .setDescription(`Les **${Math.min(newsList.length, 5)}** dernières actualités`)
-                .setFooter({ text: `${newsData?.totalElements ?? newsList.length} actualité(s) au total` });
+                .setFooter({ text: `${newsData?.total_elements ?? newsList.length} actualité(s) au total` });
 
             for (const n of newsList.slice(0, 5)) {
                 const title = snippet(n.title || n.subject || 'Sans titre', 100);

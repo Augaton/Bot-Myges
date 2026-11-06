@@ -12,6 +12,16 @@ export class ProjectService extends BaseService {
     return this.get(credentials, `/me/${year}/practicals`);
   }
 
+  /** Fichier fourni par l'enseignant (`pf_id`). */
+  static downloadProjectFile(credentials: GesAuthenticationToken, id: string, maxBytes: number) {
+    return this.download(credentials, `/me/projectFiles/${encodeURIComponent(id)}`, maxBytes);
+  }
+
+  /** Dépôt d'un groupe (`psf_id`). MyGes le note dans le journal du groupe. */
+  static downloadStepFile(credentials: GesAuthenticationToken, id: string, maxBytes: number) {
+    return this.download(credentials, `/me/projectStepFiles/${encodeURIComponent(id)}`, maxBytes);
+  }
+
   static getProject(credentials: GesAuthenticationToken, id: string) {
     return this.get<Project>(credentials, `/me/projects/${id}`);
   }

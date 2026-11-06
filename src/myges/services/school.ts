@@ -3,6 +3,10 @@ import { GesAuthenticationToken } from '../types/auth';
 
 export class SchoolService extends BaseService {
   
+  static getEvents(credentials: GesAuthenticationToken) {
+    return this.get(credentials, '/me/events');
+  }
+
   static getNews(credentials: GesAuthenticationToken) {
     return this.get(credentials, '/me/news?page=0&size=10');
   }

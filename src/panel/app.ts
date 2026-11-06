@@ -1,0 +1,522 @@
+// Serveur du panel étudiant. Volontairement sans framework ni dépendance : quelques
+// routes fixes, des en-têtes stricts, et aucune donnée MyGes stockée sur disque.
+import * as fs from 'node:fs';
+import * as http from 'node:http';
+import * as https from 'node:https';
+import * as net from 'node:net';
+import * as path from 'node:path';
+import {
+    forgetAssignments, getAbsences, getAssignments, getCourses, getEvents, getGrades, getNews, getProfile, getSyllabus, getTimetable,
+} from '../core/mygesData';
+import { BadCredentialsError, FileTooLargeError, MyGesError } from '../myges/errors';
+import { GesAPI } from '../myges/ges-api';
+import { accountKey, VALID_USERNAME } from '../myges/identifier';
+import { DocumentService } from '../myges/services/document';
+import { ProfileService } from '../myges/services/profile';
+import { ProjectService } from '../myges/services/project';
+import type { DownloadedFile } from '../myges/services/base';
+import { addDays, getMonday, startOfDay } from '../utils/datePicker';
+import {
+    acquireDownload, courseSources, MAX_FILE_BYTES, releaseDownload, safeFileName, toDocuments,
+} from '../utils/documents';
+import { fullName } from '../utils/format';
+import { log, logError } from '../utils/logger';
+import { RateLimiter } from '../utils/rateLimit';
+import { getCurrentYear } from '../utils/schoolYear';
+import { Session, Sessions } from './sessions';
+import { absencesView, coursesView, eventsView, newsView, notesView, projectDetail, projectsView, syllabusView } from './views';
+import type { GesAuthenticationToken } from '../myges/types/auth';
+
+const COOKIE = '__Host-panel';
+const MAX_BODY_BYTES = 4_096;
+const ANNUAL = 'annual';
+const WINDOW_MS = 15 * 60_000;
+const CERT_RELOAD_MS = 6 * 3_600_000;
+// Durée maximale d'un téléchargement, envoi au client compris.
+const DOWNLOAD_DEADLINE_MS = 5 * 60_000;
+
+const HEADERS = {
+    'Content-Security-Policy':
+        "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+    'Strict-Transport-Security': 'max-age=31536000',
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'X-Robots-Tag': 'noindex, nofollow',
+    'Referrer-Policy': 'no-referrer',
+    'Cross-Origin-Opener-Policy': 'same-origin',
+    'Cross-Origin-Resource-Policy': 'same-origin',
+    'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+};
+
+class HttpError extends Error {
+    readonly status: number;
+
+    constructor(status: number, message: string) {
+        super(message);
+        this.status = status;
+    }
+}
+
+const UNAVAILABLE = 'MyGES ne répond pas pour le moment. Réessaie dans quelques minutes.';
+
+/** Vrai pour une panne, où aucun mot de passe n'a été testé. */
+const isOutage = (e: unknown) => !(e instanceof MyGesError) || e.status >= 500 || e.status === 429;
+
+function loadStaticFiles() {
+    const dir = path.resolve(__dirname, '..', '..', 'assets', 'panel');
+    const file = (name: string, type: string) => ({ body: fs.readFileSync(path.join(dir, name)), type });
+    // Liste fermée : aucun chemin demandé ne touche au disque.
+    return new Map([
+        ['/', file('index.html', 'text/html; charset=utf-8')],
+        ['/app.js', file('app.js', 'text/javascript; charset=utf-8')],
+        ['/style.css', file('style.css', 'text/css; charset=utf-8')],
+    ]);
+}
+
+function sendJson(res: http.ServerResponse, status: number, body: unknown, extra: http.OutgoingHttpHeaders = {}) {
+    res.writeHead(status, { ...HEADERS, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...extra });
+    res.end(JSON.stringify(body));
+}
+
+async function readJson(req: http.IncomingMessage): Promise<any> {
+    if (!/^application\/json\b/i.test(req.headers['content-type'] ?? '')) throw new HttpError(415, 'Requête invalide.');
+    const chunks: Buffer[] = [];
+    let size = 0;
+    for await (const chunk of req) {
+        size += chunk.length;
+        if (size > MAX_BODY_BYTES) throw new HttpError(413, 'Requête trop volumineuse.');
+        chunks.push(chunk);
+    }
+    try {
+        return JSON.parse(Buffer.concat(chunks).toString('utf-8'));
+    } catch {
+        throw new HttpError(400, 'Requête invalide.');
+    }
+}
+
+/** Une écriture ne vient que de la page du panel, jamais d'un autre site. */
+function assertSameOrigin(req: http.IncomingMessage) {
+    try {
+        if (new URL(req.headers.origin ?? '').host === req.headers.host) return;
+    } catch {
+        /* Origin absent ou illisible : refusé ci-dessous */
+    }
+    throw new HttpError(403, 'Origine refusée.');
+}
+
+/**
+ * Réseau d'une adresse : /24 en IPv4, /64 en IPv6, l'unité qu'un visiteur contrôle
+ * réellement. Compter par adresse IPv6 ne limiterait personne.
+ */
+export function networkOf(address: string): string {
+    const v4 = address.replace(/^::ffff:/i, '');
+    if (net.isIPv4(v4)) return v4.split('.').slice(0, 3).join('.');
+    if (!net.isIPv6(address)) return address;
+    const [head, tail = ''] = address.toLowerCase().split('::');
+    const start = head ? head.split(':') : [];
+    const end = tail ? tail.split(':') : [];
+    const zeros = Array.from({ length: Math.max(0, 8 - start.length - end.length) }, () => '0');
+    return [...start, ...zeros, ...end].slice(0, 4).map((group) => group.replace(/^0+(?=.)/, '')).join(':');
+}
+
+/** Boucle locale ou réseau privé : d'où viendrait un proxy de confiance. */
+export function isPrivateAddress(address: string): boolean {
+    const ip = address.replace(/^::ffff:/i, '');
+    return /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip) || ip === '::1' || /^f[cd]/i.test(ip);
+}
+
+/**
+ * Derrière un proxy, seul lui peut parler au panel : il vient d'une adresse privée et
+ * pose X-Forwarded-For. Le reste est un accès direct au port, en HTTP. Il ne doit
+ * jamais obtenir le formulaire de connexion : le mot de passe y circulerait en clair,
+ * même si le port a été ouvert par erreur.
+ */
+export function isDirectAccess(peer: string, forwarded: unknown): boolean {
+    return !isPrivateAddress(peer) || !forwarded;
+}
+
+/** Une place dans un compteur : réservée avant d'interroger MyGes, rendue si l'essai ne compte pas. */
+type Slot = [RateLimiter, string];
+
+function reserve(slots: Slot[]): boolean {
+    const taken: Slot[] = [];
+    for (const slot of slots) {
+        if (!slot[0].hit(slot[1])) {
+            release(taken);
+            return false;
+        }
+        taken.push(slot);
+    }
+    return true;
+}
+
+function release(slots: Slot[]) {
+    for (const [limiter, key] of slots) limiter.forgive(key);
+}
+
+const readCookie = (req: http.IncomingMessage) => req.headers.cookie?.match(new RegExp(`(?:^|;\\s*)${COOKIE}=([^;]+)`))?.[1];
+
+export interface TlsFiles {
+    cert: string;
+    key: string;
+}
+
+const readTls = ({ cert, key }: TlsFiles) => ({ cert: fs.readFileSync(cert), key: fs.readFileSync(key) });
+
+/** Relit le certificat sur disque, sans couper les connexions en cours. */
+export function reloadTls(server: https.Server, tls: TlsFiles) {
+    try {
+        server.setSecureContext(readTls(tls));
+    } catch (e) {
+        logError('PANEL', 'Rechargement du certificat impossible, l\'ancien reste en place :', e);
+    }
+}
+
+export function createPanel({ trustProxy, tls }: { trustProxy: boolean; tls?: TlsFiles }): http.Server | https.Server {
+    const statics = loadStaticFiles();
+    const sessions = new Sessions();
+
+    // Essais échoués. Un essai réussi ne compte pas : toute une classe peut se connecter
+    // depuis le même Wi-Fi. Chaque limite vise un risque précis :
+    const failedByVisitor = new RateLimiter(5, WINDOW_MS); // un visiteur insiste sur un compte
+    const failedByNetwork = new RateLimiter(20, WINDOW_MS); // un réseau essaie un mot de passe sur tout le monde
+    const failedByAccount = new RateLimiter(20, WINDOW_MS); // un compte visé depuis beaucoup de réseaux
+    // Fusible : protège l'adresse du serveur vis-à-vis de Kordis. Haut, sinon quelques
+    // échecs volontaires suffiraient à bloquer toutes les connexions.
+    const failedTotal = new RateLimiter(300, WINDOW_MS);
+    // Connexions en boucle sur son propre compte, qui sollicitent MyGes tout autant.
+    const logins = new RateLimiter(10, WINDOW_MS);
+    const requests = new RateLimiter(120, 60_000);
+    // Chaque changement d'équipe est une vraie action sur MyGes, et il est journalisé.
+    const teamChanges = new RateLimiter(10, WINDOW_MS);
+
+    const clientAddress = (req: http.IncomingMessage) => {
+        const peer = req.socket.remoteAddress ?? '';
+        // L'en-tête n'est cru que venant du proxy : sinon, qui atteindrait le port en
+        // direct choisirait l'adresse qu'il présente, et échapperait aux limites.
+        const forwarded = trustProxy && isPrivateAddress(peer) ? String(req.headers['x-forwarded-for'] ?? '').split(',').at(-1)?.trim() : '';
+        return forwarded || peer || 'inconnue';
+    };
+
+    const requireSession = (req: http.IncomingMessage): Session => {
+        const session = sessions.get(readCookie(req));
+        if (!session) throw new HttpError(401, 'Session expirée.');
+        if (!requests.hit(session.account)) throw new HttpError(429, 'Trop de requêtes. Réessaie dans un instant.');
+        return session;
+    };
+
+    /** Exécute une lecture MyGes ; un token refusé ferme la session. */
+    const read = async <T>(session: Session, load: (token: GesAuthenticationToken) => Promise<T>): Promise<T> => {
+        try {
+            return await load(session.token);
+        } catch (e) {
+            if (e instanceof MyGesError && e.status === 401) {
+                sessions.drop(session);
+                throw new HttpError(401, 'Session expirée.');
+            }
+            if (e instanceof HttpError || e instanceof FileTooLargeError) throw e;
+            logError('PANEL', 'Lecture MyGes impossible :', e);
+            throw new HttpError(502, UNAVAILABLE);
+        }
+    };
+
+    async function login(req: http.IncomingMessage, res: http.ServerResponse) {
+        assertSameOrigin(req);
+        const body = await readJson(req);
+        const username = typeof body?.username === 'string' ? body.username.trim() : '';
+        const password = typeof body?.password === 'string' ? body.password : '';
+        if (!VALID_USERNAME.test(username) || username.length > 100 || !password || password.length > 200) {
+            throw new HttpError(400, 'Identifiant ou mot de passe invalide.');
+        }
+
+        const account = accountKey(username);
+        const network = networkOf(clientAddress(req));
+        const failureSlots: Slot[] = [
+            [failedTotal, 'all'], [failedByNetwork, network], [failedByAccount, account], [failedByVisitor, `${account}|${network}`],
+        ];
+        const loginSlot: Slot[] = [[logins, account]];
+        // Réservé avant l'appel : une rafale simultanée ne doit pas passer entre la
+        // lecture du compteur et l'échec.
+        if (!reserve([...failureSlots, ...loginSlot])) throw new HttpError(429, 'Trop de tentatives. Réessaie dans quelques minutes.');
+
+        let token: GesAuthenticationToken;
+        try {
+            token = await GesAPI.login(username, password);
+        } catch (e) {
+            release(loginSlot);
+            const refused = e instanceof BadCredentialsError;
+            if (!refused && isOutage(e)) release(failureSlots); // aucun mot de passe n'a été testé
+            if (refused) {
+                log('PANEL', 'Connexion refusée.');
+                throw new HttpError(401, 'Identifiant ou mot de passe incorrect.');
+            }
+            logError('PANEL', 'Connexion à MyGes impossible :', e);
+            throw new HttpError(503, UNAVAILABLE);
+        }
+        release(failureSlots);
+
+        // Le mot de passe est bon : reste à vérifier qu'il s'agit bien d'un étudiant.
+        let role: unknown;
+        let uid: number | null;
+        try {
+            const me = await ProfileService.getAccount(token);
+            role = me?.normalized_role;
+            uid = Number.isFinite(me?.uid) ? me.uid : null;
+        } catch (e) {
+            logError('PANEL', 'Lecture du rôle impossible :', e);
+            throw new HttpError(503, UNAVAILABLE);
+        }
+        if (role !== 'student') {
+            log('PANEL', 'Connexion refusée : ce compte n\'est pas un compte étudiant.');
+            throw new HttpError(403, 'Ce panel est réservé aux étudiants.');
+        }
+
+        const { cookie, session } = sessions.open(token, username, account, uid);
+        const profile = await getProfile(session.key, token).catch(() => null);
+        if (profile) session.name = fullName({ firstname: profile?.firstname, lastname: profile?.name });
+        log('PANEL', 'Connexion réussie.');
+        sendJson(res, 200, { name: session.name }, {
+            'Set-Cookie': `${COOKIE}=${cookie}; Path=/; HttpOnly; Secure; SameSite=Strict`,
+        });
+    }
+
+    function logout(req: http.IncomingMessage, res: http.ServerResponse) {
+        assertSameOrigin(req);
+        sessions.close(readCookie(req));
+        sendJson(res, 200, {}, { 'Set-Cookie': `${COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0` });
+    }
+
+    async function home(session: Session) {
+        const today = startOfDay(new Date());
+        const [courses, grades, absences, projects, news, events] = await Promise.allSettled([
+            // Six semaines : en alternance, le prochain cours peut être loin.
+            read(session, (t) => getTimetable(session.key, t, today, addDays(today, 42))),
+            read(session, (t) => getGrades(session.key, t)),
+            read(session, (t) => getAbsences(session.key, t)),
+            read(session, (t) => getAssignments(session.key, t)),
+            read(session, (t) => getNews(session.key, t)),
+            read(session, (t) => getEvents(session.key, t)),
+        ]);
+        // Un seul bloc en panne n'empêche pas d'afficher les autres. Un token refusé, si.
+        for (const r of [courses, grades, absences, projects, news, events]) {
+            if (r.status === 'rejected' && r.reason instanceof HttpError && r.reason.status === 401) throw r.reason;
+        }
+        const value = <T, R>(r: PromiseSettledResult<T>, view: (v: T) => R) => (r.status === 'fulfilled' ? view(r.value) : null);
+        return {
+            courses: value(courses, coursesView),
+            semester: value(grades, (g) => notesView(g).at(-1) ?? null),
+            absences: value(absences, (a) => { const { total, unjustified } = absencesView(a); return { total, unjustified }; }),
+            deadlines: value(projects, (p) => projectsView(p, session.uid).filter((item) => item.date !== null)),
+            news: value(news, (n) => newsView(n).slice(0, 3)),
+            events: value(events, (e) => eventsView(e).slice(0, 3)),
+        };
+    }
+
+    async function agenda(session: Session, url: URL) {
+        const asked = url.searchParams.get('week') ?? '';
+        const date = /^\d{4}-\d{2}-\d{2}$/.test(asked) ? new Date(`${asked}T12:00:00`) : new Date();
+        if (Number.isNaN(date.getTime())) throw new HttpError(400, 'Date invalide.');
+        const monday = getMonday(date);
+        const end = addDays(monday, 6);
+        end.setHours(23, 59, 59);
+        const courses = coursesView(await read(session, (t) => getTimetable(session.key, t, monday, end)));
+        // Semaine vide, fréquente en alternance : on indique où reprendre.
+        const later = courses.length
+            ? []
+            : coursesView(await read(session, (t) => getTimetable(session.key, t, addDays(monday, 7), addDays(monday, 49))));
+        return { start: monday.getTime(), courses, next: later[0]?.start ?? null };
+    }
+
+    /** Rejoint ou quitte une équipe, après avoir tout revérifié sur une lecture fraîche. */
+    async function changeTeam(req: http.IncomingMessage, res: http.ServerResponse, id: string, teamId: string, action: string) {
+        assertSameOrigin(req);
+        await readJson(req);
+        const session = requireSession(req);
+        if (!teamChanges.hit(session.account)) throw new HttpError(429, 'Trop de changements d\'équipe. Réessaie plus tard.');
+
+        forgetAssignments(session.key);
+        const raw = await read(session, (t) => getAssignments(session.key, t));
+        const detail = projectDetail(raw, id, session.uid);
+        const team = detail?.teams.find((t) => t.id === teamId);
+        if (!detail || !team) throw new HttpError(404, 'Équipe introuvable.');
+        const joining = action === 'rejoindre';
+        if (joining && (!detail.canJoin || team.full)) throw new HttpError(409, 'Cette équipe ne peut pas être rejointe.');
+        if (!joining && (!detail.canLeave || !team.mine)) throw new HttpError(409, 'Tu ne peux pas quitter cette équipe.');
+
+        const ids = [Number(detail.rcId), Number(id), Number(teamId)] as const;
+        await read(session, async (t) => {
+            try {
+                await (joining ? ProjectService.joinProjectGroup(t, ...ids) : ProjectService.quitProjectGroup(t, ...ids));
+            } catch (e) {
+                // Une écriture n'est jamais rejouée : on dit simplement que MyGes a refusé.
+                if (e instanceof MyGesError && e.status !== 401 && e.status < 500) throw new HttpError(409, 'MyGES a refusé cette action.');
+                throw e;
+            }
+        });
+        log('PANEL', `Équipe ${joining ? 'rejointe' : 'quittée'}.`);
+
+        forgetAssignments(session.key);
+        const fresh = await read(session, (t) => getAssignments(session.key, t));
+        sendJson(res, 200, projectDetail(fresh, id, session.uid));
+    }
+
+    async function documents(session: Session) {
+        const sources = courseSources(await read(session, (t) => getCourses(session.key, t)));
+        return [{ id: ANNUAL, name: 'Documents annuels', hint: 'Calendriers, informations générales…' }, ...sources];
+    }
+
+    async function documentFiles(session: Session, source: string) {
+        const payload = await read(session, (t) => (source === ANNUAL
+            ? DocumentService.getAnnualDocuments(t, getCurrentYear())
+            : DocumentService.getCourseFiles(t, source)));
+        return toDocuments(payload);
+    }
+
+    async function sendFile(session: Session, url: URL, res: http.ServerResponse, fetchFile: (t: GesAuthenticationToken) => Promise<DownloadedFile>) {
+        if (res.destroyed) return; // client parti pendant une lecture préalable
+        const refused = acquireDownload(session.account);
+        if (refused) throw new HttpError(429, refused);
+
+        // La place n'est rendue qu'une fois MyGes lu ET le fichier remis, ou le client
+        // parti : jusque-là, le fichier occupe la mémoire.
+        let pending = 2;
+        const done = () => {
+            if (--pending === 0) releaseDownload(session.account);
+        };
+        const deadline = setTimeout(() => res.destroy(), DOWNLOAD_DEADLINE_MS);
+        deadline.unref();
+        res.once('close', () => {
+            clearTimeout(deadline);
+            done();
+        });
+
+        try {
+            const { data, fileName } = await read(session, fetchFile);
+            // Toujours en pièce jointe et sans type interprétable : un fichier HTML
+            // déposé sur MyGes ne s'exécute pas sur l'origine du panel.
+            const name = safeFileName(fileName || url.searchParams.get('name') || 'document');
+            res.writeHead(200, {
+                ...HEADERS,
+                'Content-Type': 'application/octet-stream',
+                'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(name)}`,
+                'Content-Length': data.length,
+                'Cache-Control': 'no-store',
+            });
+            res.end(data);
+        } catch (e) {
+            if (e instanceof FileTooLargeError) throw new HttpError(413, 'Fichier trop volumineux : récupère-le sur MyGES.');
+            throw e;
+        } finally {
+            done();
+        }
+    }
+
+    async function route(req: http.IncomingMessage, res: http.ServerResponse) {
+        if (trustProxy && isDirectAccess(req.socket.remoteAddress ?? '', req.headers['x-forwarded-for'])) {
+            throw new HttpError(403, 'Accès direct refusé. Utilise l\'adresse HTTPS du panel.');
+        }
+        let url: URL;
+        try {
+            url = new URL(req.url ?? '/', 'http://panel.invalid');
+        } catch {
+            throw new HttpError(400, 'Requête invalide.');
+        }
+        const file = statics.get(url.pathname);
+
+        if ((req.method === 'GET' || req.method === 'HEAD') && file) {
+            res.writeHead(200, { ...HEADERS, 'Content-Type': file.type, 'Cache-Control': 'no-cache' });
+            res.end(file.body);
+            return;
+        }
+        if (req.method === 'POST' && url.pathname === '/api/login') return login(req, res);
+        if (req.method === 'POST' && url.pathname === '/api/logout') return logout(req, res);
+        const teamRoute = url.pathname.match(/^\/api\/projets\/([\w-]{1,40})\/equipes\/([\w-]{1,40})\/(rejoindre|quitter)$/);
+        if (req.method === 'POST' && teamRoute) return changeTeam(req, res, teamRoute[1], teamRoute[2], teamRoute[3]);
+        if (req.method !== 'GET') throw new HttpError(405, 'Méthode refusée.');
+
+        const session = () => requireSession(req);
+        const fileRoute = url.pathname.match(/^\/api\/documents\/([\w-]{1,40})(?:\/([\w-]{1,40}))?$/);
+        switch (url.pathname) {
+            case '/api/session': return sendJson(res, 200, { name: session().name });
+            case '/api/home': return sendJson(res, 200, await home(session()));
+            case '/api/agenda': return sendJson(res, 200, await agenda(session(), url));
+            case '/api/notes': {
+                const s = session();
+                return sendJson(res, 200, notesView(await read(s, (t) => getGrades(s.key, t))));
+            }
+            case '/api/absences': {
+                const s = session();
+                // Les notes ne font qu'enrichir l'écran : leur panne ne prive pas des absences.
+                const [absences, grades] = await Promise.all([
+                    read(s, (t) => getAbsences(s.key, t)),
+                    read(s, (t) => getGrades(s.key, t)).catch((e) => {
+                        if (e instanceof HttpError && e.status === 401) throw e;
+                        return [];
+                    }),
+                ]);
+                return sendJson(res, 200, absencesView(absences, grades));
+            }
+            case '/api/projets': {
+                const s = session();
+                return sendJson(res, 200, projectsView(await read(s, (t) => getAssignments(s.key, t)), s.uid));
+            }
+            case '/api/news': {
+                const s = session();
+                return sendJson(res, 200, newsView(await read(s, (t) => getNews(s.key, t))));
+            }
+            case '/api/documents': return sendJson(res, 200, await documents(session()));
+        }
+        const syllabus = url.pathname.match(/^\/api\/courses\/([\w-]{1,40})\/syllabus$/);
+        if (syllabus) {
+            const s = session();
+            return sendJson(res, 200, syllabusView(await read(s, (t) => getSyllabus(s.key, t, syllabus[1]))));
+        }
+        if (fileRoute?.[2]) {
+            const [, source, id] = fileRoute;
+            return sendFile(session(), url, res, (t) => (source === ANNUAL
+                ? DocumentService.downloadAnnualDocument(t, id, MAX_FILE_BYTES)
+                : DocumentService.downloadCourseFile(t, source, id, MAX_FILE_BYTES)));
+        }
+        const projectRoute = url.pathname.match(/^\/api\/projets\/([\w-]{1,40})(?:\/(consignes|depots)\/([\w-]{1,40}))?$/);
+        if (projectRoute) {
+            const s = session();
+            const [, id, kind, fileId] = projectRoute;
+            const detail = projectDetail(await read(s, (t) => getAssignments(s.key, t)), id, s.uid);
+            if (!detail) throw new HttpError(404, 'Projet introuvable.');
+            if (!kind) return sendJson(res, 200, detail);
+            // Seuls les fichiers affichés à cet étudiant se téléchargent : MyGes servirait
+            // peut-être aussi le dépôt d'un autre groupe à partir de son numéro.
+            const allowed = kind === 'consignes' ? detail.files : detail.steps.flatMap((step) => step.files);
+            if (!allowed.some((file) => file.id === fileId)) throw new HttpError(404, 'Fichier introuvable.');
+            return sendFile(s, url, res, (t) => (kind === 'consignes'
+                ? ProjectService.downloadProjectFile(t, fileId, MAX_FILE_BYTES)
+                : ProjectService.downloadStepFile(t, fileId, MAX_FILE_BYTES)));
+        }
+        if (fileRoute) return sendJson(res, 200, await documentFiles(session(), fileRoute[1]));
+        throw new HttpError(404, 'Page introuvable.');
+    }
+
+    const handler: http.RequestListener = (req, res) => {
+        route(req, res).catch((e) => {
+            if (!(e instanceof HttpError)) logError('PANEL', 'Erreur inattendue :', e);
+            if (res.headersSent) return void res.destroy();
+            sendJson(res, e instanceof HttpError ? e.status : 500, { error: e instanceof HttpError ? e.message : 'Erreur interne.' });
+        });
+    };
+    const server = tls
+        ? https.createServer({ ...readTls(tls), minVersion: 'TLSv1.2' }, handler)
+        : http.createServer(handler);
+    if (tls) {
+        // Un certificat d'adresse IP ne dure que 6 jours : son renouvellement ne doit
+        // pas demander de redémarrage, qui déconnecterait tout le monde.
+        const timer = setInterval(() => reloadTls(server as https.Server, tls), CERT_RELOAD_MS);
+        timer.unref();
+        server.once('close', () => clearInterval(timer));
+    }
+    // Un client lent ou muet ne doit pas garder une connexion ouverte.
+    server.headersTimeout = 10_000;
+    server.requestTimeout = 30_000;
+    server.keepAliveTimeout = 5_000;
+    server.maxConnections = 500;
+    return server;
+}

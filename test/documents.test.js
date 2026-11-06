@@ -9,7 +9,7 @@ const { FileTooLargeError, MyGesError } = dist('myges/errors.js');
 const store = dist('core/store.js');
 const { encrypt } = dist('crypto.js');
 const documents = dist('commands/documents.js');
-const { courseSources, safeFileName, toDocuments } = documents;
+const { acquireDownload, courseSources, releaseDownload, safeFileName, toDocuments } = dist('utils/documents.js');
 
 const creds = { token_type: 'bearer', access_token: 't' };
 const file = (body, headers = {}) => new Response(body, { status: 200, headers });
@@ -45,6 +45,19 @@ test('matières : celles qui ont des documents d\'abord, sans doublon', () => {
     ]);
     assert.deepStrictEqual(sources.map((s) => [s.id, s.name, s.hint]), [['2', 'Web', ''], ['1', 'Anglais', 'Semestre 1']]);
     assert.deepStrictEqual(courseSources(null), []);
+});
+
+test('format réel de MyGes : semestre des matières, sans celles qui n\'ont aucun document', () => {
+    const sources = courseSources([
+        { rc_id: 1, name: 'T1 - Anglais', has_documents: false, trimester: 'Semestre 1' },
+        { rc_id: 2, name: 'T1 - Web', has_documents: true, trimester: 'Semestre 1', teacher: 'M. Martin' },
+    ]);
+    assert.deepStrictEqual(sources.map((s) => [s.id, s.hint]), [['2', 'Semestre 1']]);
+});
+
+test('format réel de MyGes : documents annuels avec leur catégorie', () => {
+    const [doc] = toDocuments([{ category: 'INFORMATIONS GENERALES', document_id: 9, extension: '.pdf', filename: 'guide', last_update: 2000, name: 'Guide de rentrée' }]);
+    assert.deepStrictEqual(doc, { id: '9', title: 'Guide de rentrée', fileName: 'guide.pdf', date: 2000, category: 'Informations generales' });
 });
 
 test('nom de fichier : ni dossier, ni caractère de contrôle, extension conservée', () => {
@@ -90,7 +103,6 @@ test('téléchargement : un token expiré est renouvelé comme pour une lecture'
 });
 
 test('téléchargements : un seul à la fois par personne, plafond global', () => {
-    const { acquireDownload, releaseDownload } = documents;
     assert.strictEqual(acquireDownload('a'), null);
     assert.match(acquireDownload('a'), /déjà en cours/);
     assert.strictEqual(acquireDownload('b'), null);
@@ -147,6 +159,7 @@ test('/documents : matière, liste des fichiers, puis fichier reçu en privé', 
     const { replies, followUps, pick } = await openCommand('doc1');
     const menu = (reply, row = 0) => reply.components[row].components[0];
     assert.deepStrictEqual(menu(replies.at(-1)).options.map((o) => o.value), ['annual', '42']);
+    assert.strictEqual(menu(replies.at(-1)).options[0].label, 'Documents annuels');
 
     await pick('doc_source', '42');
     assert.ok(calls.at(-1).url.endsWith('/me/42/files'));

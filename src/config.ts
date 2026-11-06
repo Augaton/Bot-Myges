@@ -66,14 +66,4 @@ export function isBotOwner(userId: string): boolean {
     return OWNER_IDS.has(userId);
 }
 
-/**
- * Année scolaire courante au format attendu par l'API MyGes (ex: "2025" pour
- * l'année 2025-2026). Calculée dynamiquement : de septembre à décembre on est
- * sur l'année en cours, de janvier à août on est encore sur l'année précédente.
- */
-export function getCurrentYear(): string {
-    const now = new Date();
-    // getMonth() : 0 = janvier ... 8 = septembre
-    const year = now.getMonth() >= 8 ? now.getFullYear() : now.getFullYear() - 1;
-    return String(year);
-}
+export { getCurrentYear } from './utils/schoolYear';

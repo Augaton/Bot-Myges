@@ -5,7 +5,7 @@
     // résolution moderne de Node. `node10` a été retiré de TypeScript 7.
     "module": "nodenext",
     "moduleResolution": "nodenext",
-    "lib": ["ES2023"],
+    "lib": ["ES2024"],
     "types": ["node"],
     "outDir": "./dist",
     "rootDir": "./src",

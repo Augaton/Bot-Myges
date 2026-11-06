@@ -18,7 +18,7 @@ const command: Command = {
             .addFields(
                 { name: '🔐 Gestion du Compte', value: '` /login ` : Se connecter (via formulaire sécurisé)\n` /logout ` : Se déconnecter\n` /profil ` : Voir mon profil étudiant\n` /alertes ` : Notes, absences, rendus et agenda en MP' },
                 { name: '📅 Organisation', value: '` /agenda ` : Emploi du temps de la semaine\n` /export ` : Emploi du temps en .ics (Google Agenda, iPhone…)\n` /prochain ` : Le prochain cours à venir (Compte à rebours)\n` /projets ` : Projets, TP et deadlines' },
-                { name: '🎓 Scolarité', value: '` /notes ` : Bulletin de notes et moyennes\n` /absences ` : Liste des absences\n` /documents ` : Supports de cours et documents administratifs' },
+                { name: '🎓 Scolarité', value: '` /notes ` : Bulletin de notes et moyennes\n` /absences ` : Liste des absences\n` /documents ` : Supports de cours et documents annuels' },
                 { name: "🏫 Vie de l'École", value: '` /trombi ` : Voir les élèves de ta classe\n` /profs ` : Liste et emails de tes intervenants\n` /campus ` : Codes d\'accès et adresses\n` /news ` : Actualités de l\'école' },
                 { name: '⚙️ Système', value: '` /ping ` : Vérifier l\'état du bot et de MyGes\n` /changelog ` : Voir les dernières mises à jour\n` /config ` : Configurer le bot *(administrateurs)*' }
             )
