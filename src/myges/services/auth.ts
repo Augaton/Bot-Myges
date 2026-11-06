@@ -9,7 +9,10 @@ const AUTH_TIMEOUT_MS = 15_000;
 
 export class AuthService {
   static async generateAccessToken(username: string, password: string): Promise<AccessToken> {
-    const credentials = btoa(`${username}:${password}`);
+    // btoa lève une erreur au-delà du Latin-1 : un mot de passe avec « € » passait
+    // pour une panne de MyGes. Le Latin-1 reste encodé comme il l'a toujours été.
+    const pair = `${username}:${password}`;
+    const credentials = /^[\0-\xff]*$/.test(pair) ? btoa(pair) : Buffer.from(pair, 'utf-8').toString('base64');
 
     const response = await fetch(AUTH_URL, {
       method: 'GET',
@@ -24,13 +27,12 @@ export class AuthService {
 
     const location = response.headers.get('location');
     if (!location) {
-      // Une panne de MyGes (5xx) ou un rejet pour excès de requêtes (429) n'est
-      // pas un mauvais mot de passe : on ne doit pas les confondre, sinon un
-      // incident côté école ferait croire à l'utilisateur que son compte a changé.
-      if (response.status >= 500 || response.status === 429) {
-        throw new MyGesError(response.status, `Authentification MyGes indisponible (HTTP ${response.status})`);
-      }
-      throw new BadCredentialsError();
+      // Seul un 401 veut dire « mauvais mot de passe ». Une panne (5xx), un excès
+      // de requêtes (429) ou un refus du pare-feu de Kordis (403) n'ont rien à voir
+      // avec le compte : les confondre bloquerait la session jusqu'au prochain
+      // /login et ferait croire à l'utilisateur que son mot de passe a changé.
+      if (response.status === 401) throw new BadCredentialsError();
+      throw new MyGesError(response.status, `Authentification MyGes indisponible (HTTP ${response.status})`);
     }
 
     // Le token est dans le fragment de l'URL de redirection : #access_token=…&token_type=…

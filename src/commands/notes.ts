@@ -7,6 +7,7 @@ import { getGrades } from '../core/mygesData';
 import { log, logError } from '../utils/logger';
 import { apiErrorMessage, sessionFor } from '../utils/replies';
 import { shareRow, SHARE_ID } from '../utils/share';
+import { limitLifetime, tooManyClicks } from '../utils/collector';
 import {
     generalAverage, shortAverage, Subject, subjectColor, subjectEmoji, toSubject,
 } from '../utils/notesImage';
@@ -144,6 +145,7 @@ const command: Command = {
         // Un seul collecteur pour tous les composants : pas d'écouteurs empilés
         // lorsqu'on change de trimestre.
         const col = msg.createMessageComponentCollector({ time: 300_000 });
+        limitLifetime(col);
 
         col.on('collect', async (i) => {
             try {
@@ -153,6 +155,7 @@ const command: Command = {
                 }
                 col.resetTimer(); // tant que l'utilisateur navigue, la session reste ouverte
                 if (i.customId === SHARE_ID) return; // traité par le routeur global
+                if (await tooManyClicks(i)) return;
                 await i.deferUpdate();
 
                 if (i.isStringSelectMenu()) {

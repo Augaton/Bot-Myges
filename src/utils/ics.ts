@@ -8,9 +8,9 @@ const CRLF = '\r\n';
 export function escapeText(text: string): string {
     return text
         .replace(/\\/g, '\\\\')
-        .replace(/;/g, '\;')
+        .replace(/;/g, '\\;')
         .replace(/,/g, '\\,')
-        .replace(/\r?\n/g, '\\n');
+        .replace(/\r\n?|\n/g, '\\n');
 }
 
 /** Date en UTC au format iCalendar (20260928T070000Z) : aucun fuseau à décrire. */
@@ -63,7 +63,9 @@ export function buildIcs(courses: any[], now = new Date()): string {
 
         // UID stable par réservation MyGes : un agenda qui réimporte le
         // fichier peut reconnaître les cours déjà présents.
-        const uid = `myges-${c.reservation_id ?? `${start.getTime()}-${end.getTime()}`}@botmyges`;
+        // Filtré : contrairement au texte, un UID ne s'échappe pas.
+        const reservation = String(c.reservation_id ?? `${start.getTime()}-${end.getTime()}`).replace(/[^\w-]/g, '');
+        const uid = `myges-${reservation}@botmyges`;
         if (seen.has(uid)) continue;
         seen.add(uid);
 

@@ -1,7 +1,6 @@
 import { ChatInputCommandInteraction, EmbedBuilder, MessageFlags, SlashCommandBuilder } from 'discord.js';
 import { Command } from '../core/command';
-import { ProfileService } from '../myges/services/profile';
-import { getCurrentYear } from '../config';
+import { getAbsences } from '../core/mygesData';
 import { logError } from '../utils/logger';
 import { apiErrorMessage, sessionFor } from '../utils/replies';
 import { shareRow } from '../utils/share';
@@ -18,8 +17,7 @@ const command: Command = {
 
         let abs: any[];
         try {
-            // L'API renvoie parfois null au lieu d'un tableau vide.
-            abs = (await ProfileService.getAbsences(token, getCurrentYear())) || [];
+            abs = await getAbsences(interaction.user.id, token);
         } catch (e) {
             logError('ABSENCES', 'Récupération des absences impossible :', e);
             return interaction.editReply(apiErrorMessage(e, 'les absences'));
@@ -31,7 +29,12 @@ const command: Command = {
         if (!abs.length) {
             embed.setDescription('Aucune absence !');
         } else {
-            for (const a of abs.slice(0, 10)) {
+            // L'ordre de l'API n'est pas garanti : sans ce tri, la limite de 10
+            // pouvait masquer justement les absences les plus récentes.
+            const recent = [...abs].sort((a, b) => (new Date(b?.date).getTime() || 0) - (new Date(a?.date).getTime() || 0));
+            const unjustified = abs.filter((a) => !a?.justified).length;
+            embed.setDescription(`**${unjustified}** non justifiée${unjustified > 1 ? 's' : ''} · les plus récentes d'abord`);
+            for (const a of recent.slice(0, 10)) {
                 // Discord refuse un champ dont le nom ou la valeur est vide.
                 const name = String(a?.course_name || 'Matière inconnue').slice(0, 256);
                 const when = a?.date ? new Date(a.date) : null;

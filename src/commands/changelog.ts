@@ -9,40 +9,45 @@ import { shareRow } from '../utils/share';
  */
 export function buildChangelogEmbed(client: Client): EmbedBuilder {
     return new EmbedBuilder()
-        .setTitle(`🚀 Mise à jour ${BOT_VERSION} - "Ton agenda sous surveillance"`)
-        .setDescription("Le bot te prévient maintenant en **message privé** quand ton emploi du temps change, et peut t'envoyer ton **programme chaque matin**. Les alertes de notes sont aussi plus fiables.")
+        .setTitle(`🚀 Mise à jour ${BOT_VERSION} - "Tes documents sur Discord"`)
+        .setDescription('Tes **supports de cours** et **documents administratifs** arrivent sur Discord, tes **absences** te sont signalées en MP et tes **TP** rejoignent tes projets.')
         .setColor(0x5865f2)
         .setThumbnail(client.user?.displayAvatarURL() || null)
         .addFields(
             {
-                name: '🗓️ Nouveau : changements d\'agenda en MP',
+                name: '📚 Nouveau : `/documents`',
                 value:
-                    '• Un cours de la semaine à venir est **annulé**, **déplacé**, **ajouté** ou **change de salle** ? Je t\'envoie un MP avec l\'avant et l\'après (vérifié toutes les heures).\n' +
-                    '• Activé par défaut, à couper dans `/alertes`. Tes cours mémorisés sont **chiffrés**.',
+                    '• Choisis une matière, puis un fichier : je te l\'envoie ici, **visible par toi seul**.\n' +
+                    '• Certificats et bulletins sont dans **Documents administratifs**.',
             },
             {
-                name: '☀️ Nouveau : programme du matin',
-                value: '• Vers **7 h**, un MP avec tes cours du jour, leurs horaires et leurs salles. À activer dans `/alertes`.',
+                name: '🚫 Nouveau : absences en MP',
+                value: '• Une absence enregistrée sur MyGes ? Je te préviens par MP (vérifié toutes les heures). Activé par défaut, à couper dans `/alertes`.',
             },
             {
-                name: '📝 Notes : fini les fausses alertes',
+                name: '🧪 Les TP rejoignent les projets',
+                value: '• `/projets` et les rappels de rendus (la veille, puis 2 h avant) comptent maintenant aussi tes **travaux pratiques**.',
+            },
+            {
+                name: '🛠️ Corrections',
                 value:
-                    '• Quand l\'école retire ou insère une note, les autres ne sont plus annoncées comme nouvelles.\n' +
-                    '• Te reconnecter avec **un autre compte MyGes** ne t\'envoie plus toutes ses notes d\'un coup.',
+                    '• `/absences` affiche les **plus récentes d\'abord** et compte celles qui ne sont pas justifiées.\n' +
+                    '• `/news` affiche le résumé des actualités et le vrai total.\n' +
+                    '• Les **accents** ne disparaissent plus des actualités et consignes.\n' +
+                    '• Une réponse vide de MyGes ne s\'affiche plus comme une erreur.\n' +
+                    '• Un refus passager de MyGes n\'est plus pris pour un mot de passe changé.',
             },
             {
                 name: '🔐 Sécurité',
-                value: '• `/login` limite aussi les essais **par identifiant MyGes** : multiplier les comptes Discord ne permet plus d\'insister sur le compte de quelqu\'un.',
-            },
-            {
-                name: '⚙️ Pour les admins',
                 value:
-                    '• Les alertes de nouveaux projets partent **dès le démarrage** du bot, sans attendre une heure.\n' +
-                    '• La configuration d\'un serveur que le bot a quitté est supprimée automatiquement.',
+                    '• `/trombi` et `/profs` ne proposent plus de publier la fiche d\'une personne dans un salon.\n' +
+                    '• `/campus` est réservé aux étudiants qui ont cours sur ces campus, vérifié sur ton agenda MyGes.\n' +
+                    '• **Partager** demande le droit d\'écrire dans le salon.\n' +
+                    '• Un mot de passe contenant `€` ou un emoji fonctionne enfin.',
             },
             {
                 name: '✅ Aucune action requise',
-                value: '• Rien à reconfigurer : ta connexion, `/config`, tes salons et tes réglages d\'alertes sont conservés.',
+                value: '• Rien à reconfigurer. Les absences déjà connues ne seront pas envoyées d\'un coup.',
             }
         )
         .setFooter({ text: "Merci d'utiliser MyGes Bot ! 🎓" })

@@ -11,6 +11,7 @@ import type { SavedData } from '../core/store';
 import { forgetUser } from '../core/mygesData';
 import { runProjectCheck } from '../tasks/projects';
 import { log, logError } from '../utils/logger';
+import { RateLimiter } from '../utils/rateLimit';
 
 export const LOGIN_MODAL_ID = 'loginModal';
 
@@ -26,6 +27,12 @@ export const LOGIN_MODAL_ID = 'loginModal';
 const MAX_ATTEMPTS = 5;
 const WINDOW_MS = 15 * 60 * 1000;
 const attempts = new Map<string, number[]>();
+// Tester un même mot de passe sur beaucoup d'identifiants passerait sous les deux
+// limites ci-dessus, et tout part de l'adresse du bot : un plafond global protège
+// les comptes visés et évite de la faire bloquer par Kordis. Il n'empêche pas de
+// se reconnecter à son propre compte.
+const MAX_FAILURES = 30;
+const failures = new RateLimiter(MAX_FAILURES, WINDOW_MS);
 
 /**
  * Enregistre une tentative pour chaque clé ; renvoie le délai d'attente restant
@@ -47,6 +54,11 @@ function throttle(keys: string[]): number {
 function forgive(keys: string[]) {
     for (const key of keys) attempts.get(key)?.pop();
 }
+
+// En authentification Basic, tout ce qui suit le premier « : » est le mot de passe.
+// « cible:essai » viserait donc « cible » tout en comptant les tentatives sur un
+// identifiant chaque fois différent, ce qui contournerait la limite ci-dessus.
+const VALID_USERNAME = /^[^\s:\p{Cc}]+$/u;
 
 /** Forme canonique d'un identifiant MyGes : « P.Nom » et « p.nom » sont un même compte. */
 const accountKey = (username: string) => username.normalize('NFKC').toLowerCase();
@@ -99,6 +111,11 @@ export async function handleLoginModal(interaction: ModalSubmitInteraction) {
     const username = interaction.fields.getTextInputValue('usernameInput').trim();
     const password = interaction.fields.getTextInputValue('passwordInput');
 
+    if (!VALID_USERNAME.test(username)) {
+        await interaction.editReply({ content: '❌ **Identifiant invalide.**\nIl ressemble à `p.nom`, sans espace ni deux-points.' });
+        return;
+    }
+
     // Reconnexion au compte MyGes déjà enregistré (mot de passe changé…) : seul
     // le compteur du compte Discord s'applique. Sinon, un tiers qui épuiserait
     // les essais sur cet identifiant empêcherait son titulaire de se reconnecter.
@@ -111,7 +128,14 @@ export async function handleLoginModal(interaction: ModalSubmitInteraction) {
     // des essais groupés sur un même compte.
     const who = `${interaction.user.id}, identifiant ${fingerprint(accountKey(username)).slice(0, 8)}`;
 
-    const throttleKeys = saved && sameAccount(saved, username) ? [interaction.user.id] : [interaction.user.id, usernameKey];
+    const ownAccount = !!saved && sameAccount(saved, username);
+    if (!ownAccount && failures.full('all')) {
+        log('AUTH', `Connexion refusée (plafond global d'échecs) : ${who}`);
+        await interaction.editReply({ content: "⏳ **Trop d'échecs de connexion en ce moment.** Réessaie dans quelques minutes." });
+        return;
+    }
+
+    const throttleKeys = ownAccount ? [interaction.user.id] : [interaction.user.id, usernameKey];
     const wait = throttle(throttleKeys);
     if (wait > 0) {
         log('AUTH', `Connexion refusée (trop de tentatives) : ${who}`);
@@ -147,11 +171,11 @@ export async function handleLoginModal(interaction: ModalSubmitInteraction) {
         attempts.delete(usernameKey);
 
         await interaction.editReply({
-            content: `✅ **Connexion réussie !**\nBonjour **${username}**, je suis connecté à ton compte MyGes.\nTu peux maintenant utiliser \`/agenda\`, \`/notes\`, etc.\n\n🔔 Je t'enverrai aussi en MP tes **nouvelles notes**, un **rappel avant chaque rendu** de projet et les **changements de ton agenda** (cours annulé, déplacé, changement de salle). Réglable avec \`/alertes\`.`,
+            content: `✅ **Connexion réussie !**\nBonjour **${username}**, je suis connecté à ton compte MyGes.\nTu peux maintenant utiliser \`/agenda\`, \`/notes\`, etc.\n\n🔔 Je t'enverrai aussi en MP tes **nouvelles notes** et **absences**, un **rappel avant chaque rendu** et les **changements de ton agenda** (cours annulé, déplacé, changement de salle). Réglable avec \`/alertes\`.`,
             allowedMentions: { parse: [] },
         });
 
-        log('AUTH', `Connexion réussie : ${username} (${interaction.user.id})`);
+        log('AUTH', `Connexion réussie (${who})`);
 
         // Premier check pour charger les données (projets, etc.). Volontairement
         // non attendu : la réponse à l'utilisateur ne doit pas dépendre de l'API.
@@ -161,7 +185,10 @@ export async function handleLoginModal(interaction: ModalSubmitInteraction) {
         // sinon l'utilisateur réessaie en boucle des identifiants corrects.
         const unavailable = !(error instanceof BadCredentialsError);
         // MyGes en panne : l'essai ne compte pas, aucun mot de passe n'a été testé.
-        if (unavailable) forgive(throttleKeys);
+        // Un autre refus (403…) reste compté : on ignore s'il a jugé le mot de passe.
+        const outage = !(error instanceof MyGesError) || error.status >= 500 || error.status === 429;
+        if (unavailable && outage) forgive(throttleKeys);
+        else failures.hit('all');
         logError('AUTH', `Échec de connexion (${who})`, unavailable ? error : '(identifiants refusés)');
         await interaction.editReply({
             content: unavailable

@@ -26,21 +26,17 @@ const command: Command = {
 
         const weeks = interaction.options.getInteger('semaines') ?? DEFAULT_WEEKS;
         const monday = getMonday(new Date());
-        const courses: any[] = [];
+        const last = addDays(monday, weeks * 7 - 1);
+        last.setHours(23, 59, 59);
+        let courses: any[];
         try {
-            // Semaine par semaine, comme /agenda : mêmes requêtes, même cache.
-            for (let w = 0; w < weeks; w++) {
-                const start = addDays(monday, w * 7);
-                const end = addDays(start, 6);
-                end.setHours(23, 59, 59);
-                courses.push(...(await getTimetable(interaction.user.id, token, start, end)));
-            }
+            // Toute la période d'un coup : une seule requête MyGes, pas une par semaine.
+            courses = await getTimetable(interaction.user.id, token, monday, last);
         } catch (e) {
             logError('EXPORT', "Récupération de l'emploi du temps impossible :", e);
             return interaction.editReply(apiErrorMessage(e, "l'emploi du temps"));
         }
 
-        const last = addDays(monday, weeks * 7 - 1);
         const period = `du ${monday.toLocaleDateString('fr-FR')} au ${last.toLocaleDateString('fr-FR')}`;
         if (!courses.length) return interaction.editReply(`🎉 Aucun cours ${period}.`);
 

@@ -29,6 +29,7 @@ export interface GuildConfig {
 /** Alertes personnelles envoyées en MP (voir tasks/personalAlerts). */
 export interface UserAlerts {
     grades: boolean; // MP à chaque nouvelle note
+    absences: boolean; // MP à chaque nouvelle absence
     reminders: boolean; // MP la veille et 2 h avant chaque rendu
     agenda: boolean; // MP si un cours à venir est annulé, déplacé, ajouté ou change de salle
     digest: boolean; // MP chaque matin avec les cours du jour
@@ -36,8 +37,13 @@ export interface UserAlerts {
     gradeIdFormat?: number; // format des identifiants de notes (voir tasks/personalAlerts)
     // Empreintes (HMAC) des notes déjà signalées : aucune note n'est stockée en clair.
     knownGrades?: string[];
+    absencesYear?: string; // année scolaire des absences mémorisées
+    // Empreintes (HMAC) des absences déjà signalées.
+    knownAbsences?: string[];
     // Rappels déjà envoyés → échéance (ms), purgés une fois l'échéance passée.
-    reminded?: Record<string, number>;
+    // Chiffrés : ils diraient sinon quels projets suit chaque étudiant.
+    remindedSnapshot?: EncryptedData;
+    reminded?: Record<string, number>; // ancien format en clair, repris puis supprimé
     // Cours à venir lors de la dernière lecture de l'agenda, chiffrés.
     agendaSnapshot?: EncryptedData;
     digestSentOn?: string; // jour (AAAA-MM-JJ) du dernier programme du matin
@@ -135,8 +141,9 @@ export function loadData(): SavedData {
  * par défaut). L'objet fait partie de `data` : le modifier puis saveData suffit.
  */
 export function getUserAlerts(data: SavedData, userId: string): UserAlerts {
-    const alerts = (data.alerts[userId] ??= { grades: true, reminders: true, agenda: true, digest: false });
-    // Préférences apparues en v3.5 : valeurs par défaut pour les comptes existants.
+    const alerts = (data.alerts[userId] ??= { grades: true, absences: true, reminders: true, agenda: true, digest: false });
+    // Préférences apparues après coup : valeurs par défaut pour les comptes existants.
+    alerts.absences ??= true;
     alerts.agenda ??= true;
     alerts.digest ??= false; // programme du matin : uniquement sur demande
     return alerts;
@@ -150,7 +157,10 @@ export function resetAlertHistory(alerts: UserAlerts) {
     delete alerts.gradesYear;
     delete alerts.gradeIdFormat;
     delete alerts.knownGrades;
+    delete alerts.absencesYear;
+    delete alerts.knownAbsences;
     delete alerts.reminded;
+    delete alerts.remindedSnapshot;
     delete alerts.agendaSnapshot;
     delete alerts.digestSentOn;
 }
@@ -207,6 +217,19 @@ const restoring = new Map<string, Promise<GesAuthenticationToken | null>>();
 const failures = new Map<string, { at: number; badCredentials: boolean }>();
 // MyGes en panne : on ne le relance pas à chaque commande.
 const RETRY_AFTER_FAILURE_MS = 60_000;
+
+/** Retire aux autres comptes de la machine tout accès à ces fichiers (au démarrage). */
+export function tightenPermissions(files: string[]) {
+    for (const file of files) {
+        try {
+            if ((fs.statSync(file).mode & 0o077) === 0) continue;
+            fs.chmodSync(file, 0o600);
+            log('STORE', `Droits de ${file} resserrés (600).`);
+        } catch (e: any) {
+            if (e?.code !== 'ENOENT') logError('STORE', `Droits de ${file} à vérifier :`, e);
+        }
+    }
+}
 
 /** L'utilisateur a des identifiants enregistrés (qu'il ait une session ouverte ou non). */
 export function hasAccount(userId: string): boolean {

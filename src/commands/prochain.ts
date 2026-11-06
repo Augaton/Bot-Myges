@@ -1,7 +1,8 @@
 import { ChatInputCommandInteraction, EmbedBuilder, MessageFlags, SlashCommandBuilder } from 'discord.js';
 import { Command } from '../core/command';
-import { TimetableService } from '../myges/services/timetable';
-import { coursePlace, formatToFrenchTime } from '../utils/format';
+import { getTimetable } from '../core/mygesData';
+import { addDays, startOfDay } from '../utils/datePicker';
+import { courseName, coursePlace, formatToFrenchTime } from '../utils/format';
 import { logError } from '../utils/logger';
 import { apiErrorMessage, sessionFor } from '../utils/replies';
 import { shareRow } from '../utils/share';
@@ -17,10 +18,10 @@ const command: Command = {
         if (!token) return;
 
         try {
-            const start = new Date();
-            const end = new Date();
-            end.setDate(end.getDate() + 7);
-            const cours = (await TimetableService.getTimetable(token, start, end)) || [];
+            // Bornes calées sur minuit : la lecture est stable toute la journée, donc
+            // en cache, et c'est la même que celle des alertes d'agenda.
+            const start = startOfDay(new Date());
+            const cours = await getTimetable(interaction.user.id, token, start, addDays(start, 8));
             const now = Date.now();
             const futurs = cours.filter((c: any) => new Date(c.start_date).getTime() > now);
 
@@ -31,7 +32,7 @@ const command: Command = {
             const c = futurs[0];
             const dateDebut = new Date(c.start_date);
             const dateFin = new Date(c.end_date);
-            const nomCours = String(c.name || 'Cours').replace(/^T\d+\s-\s/i, '');
+            const nomCours = courseName(c);
 
             const place = coursePlace(c);
             const salle = place || 'Non défini';

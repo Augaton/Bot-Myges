@@ -1,12 +1,13 @@
 import {
     ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelSelectMenuBuilder, ChannelType,
     ChatInputCommandInteraction, EmbedBuilder, Guild, InteractionContextType, MessageFlags,
-    PermissionFlagsBits, SlashCommandBuilder,
+    PermissionFlagsBits, PermissionsBitField, SlashCommandBuilder,
 } from 'discord.js';
 import { Command } from '../core/command';
 import { getGuildConfig, getSession, hasAccount, loadData, saveData } from '../core/store';
 import { ProjectService } from '../myges/services/project';
 import { getCurrentYear, isBotOwner } from '../config';
+import { limitLifetime } from '../utils/collector';
 import { log, logError } from '../utils/logger';
 
 // Droits nécessaires au bot dans un salon pour y poster alertes et annonces.
@@ -24,6 +25,11 @@ async function missingPerms(guild: Guild, channelId: string): Promise<string[]> 
     const perms = me ? channel.permissionsFor(me) : null;
     if (!perms) return ['droits illisibles'];
     return REQUIRED_PERMS.filter((p) => !perms.has(p.flag)).map((p) => p.label);
+}
+
+/** Administrateur du serveur ou propriétaire du bot. */
+export function mayConfigure(permissions: Pick<PermissionsBitField, 'has'> | null, userId: string): boolean {
+    return !!permissions?.has(PermissionFlagsBits.Administrator) || isBotOwner(userId);
 }
 
 const command: Command = {
@@ -139,11 +145,19 @@ const command: Command = {
 
         const msg = await interaction.editReply(await render());
         const collector = msg.createMessageComponentCollector({ time: 300_000 });
+        limitLifetime(collector);
 
         collector.on('collect', async (i) => {
             try {
                 if (i.user.id !== interaction.user.id) {
                     await i.reply({ content: "Ce panneau ne t'appartient pas.", flags: MessageFlags.Ephemeral });
+                    return;
+                }
+                // Le panneau reste ouvert plusieurs minutes : un admin rétrogradé entre-temps
+                // ne doit pas pouvoir continuer à s'en servir.
+                if (!mayConfigure(i.memberPermissions, i.user.id)) {
+                    collector.stop('revoked');
+                    await i.reply({ content: '⛔ Tu n\'es plus administrateur de ce serveur.', flags: MessageFlags.Ephemeral });
                     return;
                 }
                 collector.resetTimer();

@@ -42,8 +42,8 @@ let restartTimer = null;
 const stamp = () => new Date().toLocaleString('fr-FR', { timeZone: 'Europe/Paris' });
 
 // --- JOURNAL SUR DISQUE ---
-// Les journaux citent des ID Discord et des identifiants MyGes : comme
-// saved_data.json, ils ne sont lisibles que par le compte qui fait tourner le bot.
+// Les journaux citent des ID Discord : comme saved_data.json, ils ne sont
+// lisibles que par le compte qui fait tourner le bot.
 // Écriture synchrone volontaire : une trace de crash écrite juste avant que le
 // superviseur ne s'arrête ne doit pas rester dans un tampon.
 const LOG_DIR = path.join(__dirname, 'logs');

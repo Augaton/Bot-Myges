@@ -8,9 +8,10 @@
 // doivent ignorer SHARE_ID pour ne pas acquitter l'interaction deux fois.
 import {
     ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonInteraction, ButtonStyle, EmbedBuilder,
-    MessageFlags,
+    MessageFlags, PermissionFlagsBits,
 } from 'discord.js';
 import { log, logError } from './logger';
+import { RateLimiter } from './rateLimit';
 
 export const SHARE_ID = 'share_public';
 
@@ -36,7 +37,25 @@ const isDiscordCdn = (url: string) => {
     }
 };
 
+// Le message est envoyé par le bot : sans ces contrôles, le bouton permettrait
+// d'écrire dans un salon en lecture seule et d'ignorer le mode lent.
+const shareLimiter = new RateLimiter(3, 60_000);
+
+/** Motif du refus de partager, ou null si le partage est permis. */
+function shareRefusal(i: ButtonInteraction): string | null {
+    if (i.inGuild() && !i.memberPermissions?.has(PermissionFlagsBits.SendMessages)) {
+        return "❌ Tu n'as pas le droit d'écrire dans ce salon.";
+    }
+    return shareLimiter.hit(i.user.id) ? null : '⏳ Tu as déjà beaucoup partagé. Réessaie dans une minute.';
+}
+
 export async function handleShare(i: ButtonInteraction) {
+    const refusal = shareRefusal(i);
+    if (refusal) {
+        await i.reply({ content: refusal, flags: MessageFlags.Ephemeral }).catch(() => {});
+        return;
+    }
+
     try {
         await i.deferUpdate(); // la vue éphémère reste telle quelle
     } catch (e) {

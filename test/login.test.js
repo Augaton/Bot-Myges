@@ -49,10 +49,26 @@ test('reconnexion avec un autre compte MyGes : l\'historique des alertes repart 
     assert.strictEqual(store.loadData().alerts.u1.grades, false);
 });
 
+test('un « : » dans l\'identifiant ne contourne pas la limite par identifiant', async () => {
+    // En Basic, « cible:essai » testerait le mot de passe « essai… » sur « cible »
+    // tout en comptant les tentatives sur un identifiant toujours différent.
+    const calls = mockFetch([]);
+    assert.match(await submit('d-colon', 'cible:essai1'), /Identifiant invalide/);
+    assert.match(await submit('d-colon', 'p nom'), /Identifiant invalide/);
+    assert.strictEqual(calls.length, 0);
+});
+
 test('MyGes en panne : l\'essai ne compte pas dans la limite', async () => {
     const calls = mockFetch(Array.from({ length: 6 }, () => json(503, {})));
     for (let i = 0; i < 6; i++) assert.match(await submit('d-panne', 'c.trois'), /MyGes ne répond pas/);
     assert.strictEqual(calls.length, 6);
+});
+
+test('refus non expliqué (403) : le message ne parle pas de mot de passe, mais l\'essai compte', async () => {
+    const calls = mockFetch(Array.from({ length: 5 }, () => json(403, {})));
+    for (let i = 0; i < 5; i++) assert.match(await submit('d-403', 'f.six'), /erreur 403/);
+    assert.match(await submit('d-403', 'f.six'), /Trop de tentatives/);
+    assert.strictEqual(calls.length, 5);
 });
 
 test('un tiers qui épuise les essais sur un identifiant ne bloque pas son titulaire déjà connecté', async () => {
@@ -64,4 +80,13 @@ test('un tiers qui épuise les essais sur un identifiant ne bloque pas son titul
 
     mockFetch([accepted()]);
     assert.match(await submit('titulaire', 'E.Cinq'), /Connexion réussie/);
+});
+
+// À laisser en dernier : le compteur est global à ce fichier de test.
+test('pulvérisation : plafond global d\'échecs, tous comptes et identifiants confondus', async () => {
+    const calls = mockFetch(Array.from({ length: 30 }, () => json(401, {})));
+    const replies = [];
+    for (let i = 0; i < 40; i++) replies.push(await submit(`spray${i}`, `cible${i}`));
+    assert.ok(replies.some((r) => /Trop d'échecs/.test(r)));
+    assert.ok(calls.length <= 30);
 });

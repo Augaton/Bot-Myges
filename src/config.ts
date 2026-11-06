@@ -14,8 +14,9 @@ const ROOT = path.resolve(__dirname, '..');
 // --- .env ---
 // Chargé nativement par Node (plus de dépendance dotenv). Les variables déjà
 // présentes dans l'environnement (systemd, Docker…) restent prioritaires.
+export const ENV_FILE = path.join(ROOT, '.env');
 try {
-    process.loadEnvFile(path.join(ROOT, '.env'));
+    process.loadEnvFile(ENV_FILE);
 } catch (e: any) {
     if (e?.code !== 'ENOENT') console.error('⚠️ .env illisible, variables d\'environnement seules utilisées :', e);
 }
@@ -53,11 +54,12 @@ export const BOT_VERSION = `v${JSON.parse(fs.readFileSync(path.join(ROOT, 'packa
 
 /**
  * Propriétaire(s) du bot : peuvent utiliser /config sur n'importe quel serveur,
- * même sans y être administrateurs. Surchargeable via OWNER_IDS (IDs Discord
- * séparés par des virgules).
+ * même sans y être administrateurs (OWNER_IDS : IDs Discord séparés par des
+ * virgules). Aucun par défaut : le dépôt est public, et une installation d'un
+ * tiers ne doit donner de droits à personne.
  */
 const OWNER_IDS = new Set(
-    (process.env.OWNER_IDS || '456653480048852995').split(',').map((id) => id.trim()).filter(Boolean)
+    (process.env.OWNER_IDS ?? '').split(',').map((id) => id.trim()).filter(Boolean)
 );
 
 export function isBotOwner(userId: string): boolean {

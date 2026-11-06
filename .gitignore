@@ -1,9 +1,9 @@
-/.env
+.env*
+!.env.example
 /.vscode
 # Identifiants utilisateurs chiffrés : NE JAMAIS commit
-/saved_data.json
-saved_data.json
-saved_data.json.tmp
+# (dont le temporaire d'écriture et les copies .bak-avant-scrypt)
+saved_data.json*
 # Codes d'accès des campus : le dépôt est public, ils ne doivent jamais y figurer
 /campus.json
 # Archives locales du code (src.zip & co) : jamais dans le dépôt

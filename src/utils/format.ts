@@ -1,13 +1,36 @@
 // Fonctions utilitaires de formatage partagées entre plusieurs commandes.
 
+// Entités des textes MyGes : les accents français, la ponctuation typographique
+// et les caractères réservés du HTML.
+const HTML_ENTITIES: Record<string, string> = {
+    nbsp: ' ', amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", rsquo: '’', lsquo: '‘', ldquo: '“', rdquo: '”',
+    hellip: '…', ndash: '–', mdash: '—', laquo: '«', raquo: '»', deg: '°', euro: '€', oelig: 'œ',
+    agrave: 'à', acirc: 'â', ccedil: 'ç', eacute: 'é', egrave: 'è', ecirc: 'ê', euml: 'ë', icirc: 'î', iuml: 'ï',
+    ocirc: 'ô', ouml: 'ö', ugrave: 'ù', ucirc: 'û', uuml: 'ü',
+    Agrave: 'À', Ccedil: 'Ç', Eacute: 'É', Egrave: 'È', Ecirc: 'Ê',
+};
+
+function decodeEntity(_entity: string, name: string): string {
+    if (name[0] !== '#') return HTML_ENTITIES[name] ?? ' ';
+    const code = name[1].toLowerCase() === 'x' ? parseInt(name.slice(2), 16) : Number(name.slice(1));
+    return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : ' ';
+}
+
+// Un aperçu fait quelques centaines de caractères : au-delà, le texte ne servirait
+// à rien et coûterait du temps sur le thread principal.
+const MAX_SNIPPET_INPUT = 20_000;
+
 // Transforme un texte (potentiellement du HTML) en une ligne courte lisible.
 export function snippet(raw: string, max = 120): string {
     if (!raw) return '';
     const clean = raw
+        .slice(0, MAX_SNIPPET_INPUT)
         .replace(/<br\s*\/?>/gi, ' ')
-        .replace(/<[^>]+>/g, ' ')
-        .replace(/&nbsp;/gi, ' ')
-        .replace(/&[a-z]+;/gi, ' ')
+        // [^<>] et non [^>] : sur une suite de « < », ce dernier devient quadratique
+        // (66 s de gel pour 200 000 caractères, mesurés).
+        .replace(/<[^<>]+>/g, ' ')
+        // Après le retrait des balises : un « &lt;b&gt; » est du texte, pas du HTML.
+        .replace(/&(#\d+|#x[\da-f]+|[a-z]+);/gi, decodeEntity)
         .replace(/\s+/g, ' ')
         .trim();
     return clean.length > max ? clean.slice(0, max - 1) + '…' : clean;

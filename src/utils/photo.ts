@@ -1,5 +1,12 @@
 // Téléchargement des photos MyGes (trombinoscope, professeurs).
+import { readBounded } from '../myges/services/base';
 import { logError } from './logger';
+
+// Une photo de trombinoscope pèse quelques centaines de Ko. Ces limites gardent
+// la mémoire d'une navigation bornée, quoi que réponde le serveur.
+const MAX_PHOTO_BYTES = 2 * 1024 * 1024;
+const MAX_CACHED_PHOTOS = 30;
+const MAX_PHOTO_REDIRECTS = 3;
 
 /**
  * Vérifie que l'URL pointe bien vers MyGes avant d'y envoyer quoi que ce soit.
@@ -18,6 +25,25 @@ function isTrustedMygesUrl(url: string): boolean {
 }
 
 /**
+ * Comme fetch, mais chaque redirection est contrôlée : l'URL de départ a beau être
+ * fiable, elle ne doit pas pouvoir mener le bot vers une adresse interne.
+ * Renvoie null si une étape quitte MyGes.
+ */
+async function fetchTrusted(url: string, headers: Record<string, string>): Promise<Response | null> {
+    let next = url;
+    for (let hop = 0; hop <= MAX_PHOTO_REDIRECTS; hop++) {
+        if (!isTrustedMygesUrl(next)) break;
+        const response = await fetch(next, { headers, redirect: 'manual', signal: AbortSignal.timeout(10_000) });
+        const location = response.headers.get('location');
+        if (response.status < 300 || response.status >= 400 || !location) return response;
+        await response.body?.cancel().catch(() => {});
+        next = new URL(location, next).href;
+    }
+    logError('PHOTO', 'Redirection refusée : elle quitte MyGes ou se répète trop.');
+    return null;
+}
+
+/**
  * Récupère la photo et renvoie son contenu, ou null si indisponible.
  *
  * @param cache Cache fourni par l'appelant (une Map par exécution de commande) :
@@ -33,32 +59,32 @@ export async function fetchPhotoBuffer(
     if (cached !== undefined) return cached;
 
     let buffer: Buffer | null = null;
+    const remember = (value: Buffer | null) => {
+        cache.set(photoUrl, value);
+        if (cache.size > MAX_CACHED_PHOTOS) cache.delete(cache.keys().next().value!);
+        return value;
+    };
 
     if (!isTrustedMygesUrl(photoUrl)) {
         logError('PHOTO', `URL non fiable ignorée, token non transmis : ${photoUrl}`);
-        cache.set(photoUrl, null);
-        return null;
+        return remember(null);
     }
 
     try {
         // On tente d'abord sans authentification, puis avec le token si besoin.
         // Délai maximal : une photo qui ne vient pas ne doit pas bloquer la
         // navigation dans le trombinoscope.
-        let response = await fetch(photoUrl, { signal: AbortSignal.timeout(10_000) });
-        if (!response.ok) {
+        let response = await fetchTrusted(photoUrl, {});
+        if (response && !response.ok) {
             // Corps non lu = connexion retenue : on le libère avant de rejouer.
             await response.body?.cancel().catch(() => {});
-            response = await fetch(photoUrl, {
-                headers: { Authorization: `${token.token_type} ${token.access_token}` },
-                signal: AbortSignal.timeout(10_000),
-            });
+            response = await fetchTrusted(photoUrl, { Authorization: `${token.token_type} ${token.access_token}` });
         }
-        if (response.ok) buffer = Buffer.from(await response.arrayBuffer());
-        else await response.body?.cancel().catch(() => {});
+        if (response?.ok) buffer = await readBounded(response, MAX_PHOTO_BYTES);
+        else await response?.body?.cancel().catch(() => {});
     } catch (e) {
         logError('PHOTO', 'Téléchargement de la photo impossible :', e);
     }
 
-    cache.set(photoUrl, buffer);
-    return buffer;
+    return remember(buffer);
 }

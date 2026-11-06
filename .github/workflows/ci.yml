@@ -24,13 +24,15 @@ jobs:
       matrix:
         node: ['22', '26']
     steps:
-      - uses: actions/checkout@v5
+      # Figées par empreinte : un tag d'action peut être déplacé, pas un commit.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           # Le jeton GitHub n'a pas à rester accessible aux scripts npm.
           persist-credentials: false
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: ${{ matrix.node }}
           cache: npm
-      - run: npm ci
+      # Aucune dépendance n'a besoin de script d'installation : autant les interdire.
+      - run: npm ci --ignore-scripts
       - run: npm test

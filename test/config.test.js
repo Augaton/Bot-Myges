@@ -14,9 +14,10 @@ test('le bot vit à l\'heure de Paris, même sur un serveur en UTC', () => {
 });
 
 test('le propriétaire du bot est reconnu, et lui seul', () => {
-    const { isBotOwner } = dist('config.js');
-    assert.strictEqual(isBotOwner('456653480048852995'), true);
-    assert.strictEqual(isBotOwner('123456789012345678'), false);
+    const script = `const {isBotOwner}=require(${JSON.stringify(path.join(__dirname, '..', 'dist', 'config.js'))});` +
+        `process.stdout.write(String([isBotOwner('111'),isBotOwner('222')]));`;
+    const out = spawnSync(process.execPath, ['-e', script], { env: { ...process.env, OWNER_IDS: '111' }, encoding: 'utf-8' });
+    assert.strictEqual(out.stdout, 'true,false');
 });
 
 test('la version affichée suit package.json', () => {

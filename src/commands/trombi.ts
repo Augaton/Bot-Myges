@@ -9,7 +9,7 @@ import { fetchPhotoBuffer } from '../utils/photo';
 import { byLastName, fullName } from '../utils/format';
 import { logError } from '../utils/logger';
 import { apiErrorMessage, sessionFor } from '../utils/replies';
-import { shareRow, SHARE_ID } from '../utils/share';
+import { limitLifetime, tooManyClicks } from '../utils/collector';
 
 const command: Command = {
     data: new SlashCommandBuilder()
@@ -75,13 +75,16 @@ const command: Command = {
                     new ButtonBuilder().setCustomId('next_s').setLabel('➡️').setStyle(ButtonStyle.Primary).setDisabled(i === students.length - 1)
                 );
 
-                return { embeds: [embed], components: [buttons, shareRow()], files };
+                // Volontairement sans bouton « Partager » : la photo et l'e-mail d'un camarade
+                // n'ont pas à être publiés dans un salon sans son accord.
+                return { embeds: [embed], components: [buttons], files };
             };
 
             const payload = await showStudent(index);
             const msg = await interaction.editReply(payload);
 
             const collector = msg.createMessageComponentCollector({ componentType: ComponentType.Button, time: 300000 });
+            limitLifetime(collector);
 
             collector.on('collect', async (i) => {
                 try {
@@ -89,7 +92,7 @@ const command: Command = {
                         await i.reply({ content: 'Pas touche !', flags: MessageFlags.Ephemeral });
                         return;
                     }
-                    if (i.customId === SHARE_ID) return; // traité par le routeur global
+                    if (await tooManyClicks(i)) return;
                     collector.resetTimer(); // tant que l'utilisateur navigue, la session reste ouverte
                     await i.deferUpdate();
 
@@ -106,8 +109,7 @@ const command: Command = {
             });
 
             collector.on('end', async () => {
-                // Navigation devenue inerte : on la retire, le partage reste possible.
-                await interaction.editReply({ components: [shareRow()] }).catch(() => {});
+                await interaction.editReply({ components: [] }).catch(() => {}); // navigation devenue inerte
             });
         } catch (e) {
             logError('TROMBI', 'Récupération du trombinoscope impossible :', e);

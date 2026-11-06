@@ -5,7 +5,7 @@ const { dist } = require('./helpers');
 const { buildIcs, escapeText, foldLine } = dist('utils/ics.js');
 
 test('échappement des caractères spéciaux iCalendar', () => {
-    assert.strictEqual(escapeText('a;b,c\\d\ne'), 'a\;b\\,c\\\\d\\ne');
+    assert.strictEqual(escapeText('a;b,c\\d\ne'), 'a\\;b\\,c\\\\d\\ne');
 });
 
 test('repli des lignes à 75 octets sans couper un accent', () => {

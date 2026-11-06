@@ -4,13 +4,14 @@ import {
 } from 'discord.js';
 import { Command } from '../core/command';
 import { getUserAlerts, hasAccount, loadData, saveData } from '../core/store';
+import { limitLifetime } from '../utils/collector';
 import { sendDM } from '../utils/dm';
 import { log, logError } from '../utils/logger';
 
 const command: Command = {
     data: new SlashCommandBuilder()
         .setName('alertes')
-        .setDescription('Gérer tes alertes en MP : notes, rendus, changements d\'agenda, programme du matin'),
+        .setDescription('Gérer tes alertes en MP : notes, absences, rendus, agenda, programme du matin'),
 
     execute: async (interaction: ChatInputCommandInteraction) => {
         const userId = interaction.user.id;
@@ -33,9 +34,15 @@ const command: Command = {
                             : '❌ Désactivées',
                     },
                     {
+                        name: '🚫 Nouvelles absences',
+                        value: alerts.absences
+                            ? '✅ Activées : un MP dès qu\'une absence est enregistrée sur MyGes (vérifié toutes les heures).'
+                            : '❌ Désactivées',
+                    },
+                    {
                         name: '⏰ Rappels de rendus',
                         value: alerts.reminders
-                            ? '✅ Activés : un MP la veille (24 h avant) et 2 h avant chaque échéance de projet.'
+                            ? '✅ Activés : un MP la veille (24 h avant) et 2 h avant chaque échéance de projet ou de TP.'
                             : '❌ Désactivés',
                     },
                     {
@@ -59,6 +66,7 @@ const command: Command = {
                 .setStyle(on ? ButtonStyle.Secondary : ButtonStyle.Success);
             const toggles = new ActionRowBuilder<ButtonBuilder>().addComponents(
                 toggle('alert_grades', alerts.grades, '📝', 'les notes'),
+                toggle('alert_absences', alerts.absences, '🚫', 'les absences'),
                 toggle('alert_reminders', alerts.reminders, '⏰', 'les rappels'),
                 toggle('alert_agenda', alerts.agenda, '🗓️', 'l\'agenda'),
                 toggle('alert_digest', alerts.digest, '☀️', 'le matin'),
@@ -71,6 +79,7 @@ const command: Command = {
 
         const msg = await interaction.editReply(view());
         const collector = msg.createMessageComponentCollector({ componentType: ComponentType.Button, time: 300_000 });
+        limitLifetime(collector);
 
         collector.on('collect', async (i) => {
             try {
@@ -106,6 +115,13 @@ const command: Command = {
                         delete alerts.knownGrades;
                         delete alerts.gradesYear;
                     }
+                } else if (i.customId === 'alert_absences') {
+                    alerts.absences = !alerts.absences;
+                    // Même logique que les notes.
+                    if (!alerts.absences) {
+                        delete alerts.knownAbsences;
+                        delete alerts.absencesYear;
+                    }
                 } else if (i.customId === 'alert_reminders') {
                     alerts.reminders = !alerts.reminders;
                 } else if (i.customId === 'alert_agenda') {
@@ -118,7 +134,7 @@ const command: Command = {
                 }
                 saveData(data);
                 const state = (on: boolean) => (on ? 'on' : 'off');
-                log('ALERTES', `${userId} : notes ${state(alerts.grades)}, rappels ${state(alerts.reminders)}, agenda ${state(alerts.agenda)}, matin ${state(alerts.digest)}`);
+                log('ALERTES', `${userId} : notes ${state(alerts.grades)}, absences ${state(alerts.absences)}, rappels ${state(alerts.reminders)}, agenda ${state(alerts.agenda)}, matin ${state(alerts.digest)}`);
                 await i.update(view());
             } catch (e) {
                 logError('ALERTES', 'Mise à jour du panneau impossible :', e);

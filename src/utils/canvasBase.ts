@@ -65,9 +65,13 @@ export function roundRect(ctx: SKRSContext2D, x: number, y: number, w: number, h
     ctx.closePath();
 }
 
+// Aucune vignette n'affiche davantage. Mesurer du texte est coûteux, et le coût
+// croît avec le carré de la longueur d'un mot : 30 s pour 1 000 caractères (mesuré).
+const MAX_TEXT_CHARS = 200;
+
 // Découpe un texte pour une largeur donnée à la police courante (déjà settée).
 export function wrapAt(ctx: SKRSContext2D, text: string, maxW: number): string[] {
-    const words = text.split(/\s+/).filter(Boolean);
+    const words = text.slice(0, MAX_TEXT_CHARS).split(/\s+/).filter(Boolean);
     const lines: string[] = [];
     let line = '';
     const pushBroken = (chunk: string) => {
@@ -99,8 +103,8 @@ export function wrapAt(ctx: SKRSContext2D, text: string, maxW: number): string[]
 
 // Tronque un texte sur une seule ligne (police courante déjà settée).
 export function ellipsize(ctx: SKRSContext2D, text: string, maxW: number): string {
-    if (ctx.measureText(text).width <= maxW) return text;
-    let cur = text;
+    let cur = text.slice(0, MAX_TEXT_CHARS);
+    if (ctx.measureText(cur).width <= maxW) return cur;
     while (cur.length > 1 && ctx.measureText(cur + '…').width > maxW) cur = cur.slice(0, -1);
     return cur + '…';
 }

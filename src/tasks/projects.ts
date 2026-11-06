@@ -3,6 +3,7 @@ import { getProjects } from '../core/mygesData';
 import { getGuildConfig, getSession, hasAccount, loadData, saveData } from '../core/store';
 import { getNextStep, snippet } from '../utils/format';
 import { log, logError } from '../utils/logger';
+import { md } from '../utils/markdown';
 
 // Garde-fou anti-chevauchement, partagé par TOUS les appelants (tâche horaire
 // et déclenchement après un /login). Deux passes concurrentes liraient chacune
@@ -96,12 +97,12 @@ export async function checkNewProjects(client: Client) {
 
                 const embed = new EmbedBuilder()
                     .setTitle('🚨 NOUVEAU PROJET !')
-                    .setDescription(`Nouveau projet en **${p.course_name}**`)
+                    .setDescription(`Nouveau projet en **${md(String(p.course_name ?? ''))}**`)
                     .setColor(0xff0000)
                     .addFields(
-                        { name: 'Nom', value: String(p.name || 'Sans titre').slice(0, 1024), inline: true },
+                        { name: 'Nom', value: md(String(p.name || 'Sans titre')).slice(0, 1024), inline: true },
                         { name: `📅 ${typeStep}`, value: dateStr, inline: true },
-                        { name: 'Objectif', value: snippet(p.project_teaching_goals, 500) || 'Voir MyGes' }
+                        { name: 'Objectif', value: md(snippet(p.project_teaching_goals, 500)) || 'Voir MyGes' }
                     )
                     .setFooter({ text: 'Alerte MyGes' })
                     .setTimestamp();

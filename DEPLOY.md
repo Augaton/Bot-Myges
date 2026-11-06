@@ -12,7 +12,7 @@
 ## Installation / mise à jour
 
 ```bash
-npm ci                  # installe exactement le package-lock (devDependencies comprises, pour le build)
+npm ci --ignore-scripts # installe exactement le package-lock (devDependencies comprises, pour le build)
 npm run build           # compile src/ → dist/ (TypeScript 7)
 npm start               # build + lancement supervisé (voir plus bas)
 ```
@@ -52,7 +52,7 @@ d'`index.js`, ou systemd ci-dessous.
 |---|---|---|
 | `DISCORD_TOKEN` | oui | Token du bot. Absent → le processus refuse de démarrer. |
 | `ENCRYPTION_KEY` | oui | Au moins 32 caractères (exactement 32 pour relire des données antérieures à la v3.4). Sert à chiffrer les identifiants MyGes. |
-| `OWNER_IDS` | non | ID(s) Discord du/des propriétaire(s), séparés par des virgules. Défaut : `456653480048852995`. Peuvent utiliser `/config` sur tout serveur, même sans être admin. |
+| `OWNER_IDS` | non | ID(s) Discord du/des propriétaire(s), séparés par des virgules. Peuvent utiliser `/config` sur tout serveur, même sans être admin. Absent ou vide : aucun propriétaire. |
 | `DB_FILE` | non | Fichier de persistance (défaut : `<racine>/saved_data.json`). |
 | `CAMPUS_FILE` | non | Codes d'accès des campus (défaut : `<racine>/campus.json`). |
 
@@ -66,9 +66,10 @@ réglé en UTC ne décale plus l'agenda. Rien à configurer.
 support de sauvegarde non chiffré** : la clé déchiffre tous les mots de passe
 MyGes stockés.
 
-```bash
-chmod 600 .env saved_data.json campus.json
-```
+Au démarrage, le bot ramène `.env`, `saved_data.json` et `campus.json` en mode 600,
+ce qui rattrape un envoi par SFTP. Il signale aussi une copie
+`saved_data.json.bak-avant-scrypt` restante, à supprimer : elle n'est pas effacée
+par `/logout`.
 
 ## Chiffrement des identifiants (v3.4)
 
@@ -92,15 +93,33 @@ Toutes les 15 min, le bot vérifie pour chaque utilisateur connecté (au plus un
 lecture MyGes par heure et par personne) :
 
 - les **nouvelles notes** → MP (premier passage silencieux : l'historique n'est pas envoyé) ;
-- les **échéances de projets** → MP 24 h puis 2 h avant ;
+- les **nouvelles absences** → MP (premier passage silencieux, lui aussi) ;
+- les **échéances de projets et de TP** → MP 24 h puis 2 h avant ;
 - les **changements d'agenda** sur la semaine à venir (cours annulé, déplacé,
   ajouté, changement de salle) → MP (premier passage silencieux, lui aussi) ;
 - le **programme du matin** → MP vers 7 h avec les cours du jour (désactivé par défaut).
 
 Chacun règle ses alertes avec `/alertes` (toutes activées par défaut, sauf le
-programme du matin). Les notes déjà vues sont mémorisées sous forme d'empreintes
-HMAC, jamais en clair ; les cours à venir déjà vus sont chiffrés comme les
+programme du matin). Les notes et absences déjà vues sont mémorisées sous forme
+d'empreintes HMAC, jamais en clair ; les cours à venir déjà vus sont chiffrés comme les
 identifiants. Aucun intent Discord supplémentaire n'est nécessaire pour envoyer des MP.
+
+## Limites
+
+| Quoi | Limite |
+|---|---|
+| Commandes | 10 par 30 s et par personne |
+| Clics dans un panneau | 20 par 30 s et par personne |
+| Partage dans un salon | 3 par minute et par personne, droit d'écrire requis |
+| `/login` | 5 essais par 15 min (par compte Discord et par identifiant MyGes), 30 échecs par 15 min en tout |
+| Téléchargements `/documents` | 1 par personne, 3 en tout |
+| Rendus en attente | 16, les suivants sont refusés |
+
+## Documents (`/documents`)
+
+Les fichiers transitent par la mémoire du bot, jamais par le disque : ils sont
+téléchargés depuis MyGes puis envoyés en message éphémère, plafonnés à la limite
+d'envoi du salon (10 Mo sur un serveur sans boost) et à 25 Mo dans tous les cas.
 
 ## Journaux
 
@@ -109,8 +128,8 @@ identifiants. Aucun intent Discord supplémentaire n'est nécessaire pour envoye
   dans `logs/bot-AAAA-MM-JJ.log` (heure de Paris), un fichier par jour, 14 jours
   conservés. `tail -f logs/bot-$(date +%F).log` pour suivre en direct.
   Comme `saved_data.json`, ils ne sont lisibles que par le compte du bot
-  (dossier 700, fichiers 600). Les identifiants MyGes saisis lors d'un échec de
-  `/login` n'y figurent jamais en clair, ni les jetons d'interaction Discord.
+  (dossier 700, fichiers 600). Les identifiants MyGes saisis dans `/login` n'y
+  figurent jamais en clair, ni les jetons d'interaction Discord.
 
 En cas de crash ou de lenteur, les lignes utiles sont `[SANTÉ]` (RAM, chaque
 heure), `[DISCORD] Passerelle…`, `[MYGES] … nouvelle tentative` et `[SUPERVISEUR]`.
@@ -127,6 +146,12 @@ lus dans `campus.json` (ignoré par git), au format de `campus.example.json` :
 **À copier sur le serveur** (il n'est pas envoyé par git). Sans ce fichier,
 `/campus` affiche les adresses avec « code non renseigné ». Le fichier est relu à
 chaque appel : pas besoin de redémarrer après modification.
+
+`/campus` n'affiche ces codes qu'à un étudiant dont l'agenda MyGes contient un cours
+sur l'un de ces campus (3 semaines passées, 6 à venir). Si MyGes ne répond pas, rien
+n'est affiché. Un refus inattendu laisse la ligne `[CAMPUS] Accès refusé…`, qui cite
+les campus vus : à reporter dans `OUR_CAMPUSES` (`src/commands/campus.ts`) si l'un
+d'eux manque.
 
 ## Service systemd
 
@@ -155,9 +180,19 @@ EnvironmentFile=/opt/botdiscordmyges/.env
 # Durcissement
 NoNewPrivileges=true
 PrivateTmp=true
+PrivateDevices=true
 ProtectSystem=strict
 ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+CapabilityBoundingSet=
+UMask=0077
 ReadWritePaths=/opt/botdiscordmyges
+# Pas de MemoryDenyWriteExecute : le JIT de V8 en a besoin.
 
 [Install]
 WantedBy=multi-user.target

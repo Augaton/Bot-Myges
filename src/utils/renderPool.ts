@@ -8,9 +8,10 @@
 // les flèches en même temps suffisait à faire échouer des commandes.
 //
 // Le pool déporte ces rendus sur des threads dédiés : l'event-loop reste libre.
-// Règle de conception : le pool ne doit JAMAIS faire échouer un rendu. Toute
-// défaillance (worker qui ne démarre pas, qui plante ou qui se bloque) retombe
-// sur le rendu synchrone d'origine — plus lent, mais correct.
+// Règle de conception : une panne du pool ne doit JAMAIS faire échouer un rendu.
+// Toute défaillance (worker qui ne démarre pas, qui plante ou qui se bloque)
+// retombe sur le rendu synchrone d'origine — plus lent, mais correct. Seule une
+// file saturée refuse un rendu : c'est une surcharge, pas une panne.
 import { Worker } from 'node:worker_threads';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -27,6 +28,10 @@ const WORKER_FILE = path.join(__dirname, `renderWorker${path.extname(__filename)
 // tuer le bot (OOM) sur un petit serveur après quelques heures. Un rendu dure
 // ~100 ms, deux threads suffisent largement à la charge d'une promo.
 const POOL_SIZE = Math.max(1, Math.min(2, os.availableParallelism() - 1));
+
+// Au-delà, la demande est refusée : chaque rendu en attente garde ses données en
+// mémoire, et personne n'attend plusieurs secondes une image déjà périmée.
+const MAX_QUEUE = 16;
 
 // Filet contre un worker bloqué : au-delà, on le tue et on rejoue le rendu.
 const JOB_TIMEOUT_MS = 15_000;
@@ -146,8 +151,12 @@ function spawn(): Slot | null {
     return slot;
 }
 
-/** Un worker a échoué ou s'est bloqué : on sauve son job et on le remplace. */
-function recycle(slot: Slot, error: Error) {
+/**
+ * Un worker a échoué ou s'est bloqué : on sauve son job et on le remplace.
+ * `replay` à faux pour un rendu trop long : le rejouer sur le thread principal le
+ * gèlerait autant de temps, et plus personne ne pourrait utiliser le bot.
+ */
+function recycle(slot: Slot, error: Error, replay = true) {
     const job = release(slot);
 
     // Un worker mort sans avoir jamais travaillé = démarrage raté.
@@ -159,9 +168,12 @@ function recycle(slot: Slot, error: Error) {
 
     // Le job n'est pas perdu : on le rejoue sur le thread principal. L'utilisateur
     // voit son image, simplement rendue de la façon lente.
-    if (job) {
+    if (job && replay) {
         logError('RENDER', `Rendu « ${job.job} » repris en synchrone : ${error.message}`);
         runInline(job);
+    } else if (job) {
+        logError('RENDER', `Rendu « ${job.job} » abandonné : ${error.message}`);
+        job.reject(error);
     }
 
     if (!slots) return; // pool déjà démantelé
@@ -212,7 +224,7 @@ function pump() {
         const job = queue.shift()!;
         slot.current = job;
         slot.timer = setTimeout(
-            () => recycle(slot, new Error(`rendu interrompu après ${JOB_TIMEOUT_MS} ms`)),
+            () => recycle(slot, new Error(`rendu interrompu après ${JOB_TIMEOUT_MS} ms`), false),
             JOB_TIMEOUT_MS
         );
         slot.worker.postMessage({ job: job.job, args: job.args });
@@ -224,6 +236,10 @@ function run(job: string, args: any[], inline: () => Buffer): Promise<Buffer> {
         const item: Job = { job, args, inline, resolve, reject };
         if (!ensurePool()) {
             runInline(item);
+            return;
+        }
+        if (queue.length >= MAX_QUEUE) {
+            reject(new Error('File de rendu saturée'));
             return;
         }
         queue.push(item);

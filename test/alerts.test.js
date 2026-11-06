@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { dist } = require('./helpers');
 
-const { gradeEvents, upcomingDeadlines, dueReminders, agendaChanges } = dist('tasks/personalAlerts.js');
+const { absenceEvents, gradeEvents, upcomingDeadlines, dueReminders, agendaChanges } = dist('tasks/personalAlerts.js');
 
 const H = 3_600_000;
 
@@ -95,4 +95,16 @@ test('agenda : une réponse vide de MyGes n\'annonce pas une semaine entière an
     const result = agendaChanges([], snapshot, T0 + H, T0 + 8 * 24 * H);
     assert.deepStrictEqual(result.changes, []);
     assert.strictEqual(result.next, snapshot); // lecture précédente conservée
+});
+
+test('absences : justifier une absence ne la fait pas passer pour nouvelle', () => {
+    const before = absenceEvents([{ course_name: 'Web', date: 1000, justified: false }]);
+    const after = absenceEvents([{ course_name: 'Web', date: 1000, justified: true }]);
+    assert.strictEqual(before[0].id, after[0].id);
+    assert.strictEqual(after[0].justified, true);
+});
+
+test('absences : une entrée sans date exploitable est ignorée', () => {
+    assert.deepStrictEqual(absenceEvents([{ course_name: 'Web' }, null, { date: 'pas une date' }]), []);
+    assert.strictEqual(absenceEvents([{ date: '2026-10-01T08:00:00Z' }])[0].course, 'Matière inconnue');
 });

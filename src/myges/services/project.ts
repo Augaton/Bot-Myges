@@ -7,6 +7,11 @@ export class ProjectService extends BaseService {
     return this.get(credentials, `/me/${year}/projects`);
   }
 
+  /** Travaux pratiques : même structure que les projets (étapes, échéances). */
+  static getPracticals(credentials: GesAuthenticationToken, year: string) {
+    return this.get(credentials, `/me/${year}/practicals`);
+  }
+
   static getProject(credentials: GesAuthenticationToken, id: string) {
     return this.get<Project>(credentials, `/me/projects/${id}`);
   }

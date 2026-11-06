@@ -1,15 +1,17 @@
 // En premier : charge le .env et fixe le fuseau horaire avant tout le reste.
-import { BOT_VERSION, CHECK_INTERVAL, DB_FILE, EXIT_CONFIG } from './config';
+import { BOT_VERSION, CAMPUS_FILE, CHECK_INTERVAL, DB_FILE, ENV_FILE, EXIT_CONFIG } from './config';
+import * as fs from 'node:fs';
 import {
     ActivityType, Client, Events, GatewayIntentBits, MessageFlags, Options, Status,
 } from 'discord.js';
 import { commands, commandsJSON } from './core/registry';
-import { loadData, saveData, sessionCount } from './core/store';
+import { loadData, saveData, sessionCount, tightenPermissions } from './core/store';
 import { handleLoginModal, LOGIN_MODAL_ID } from './commands/login';
 import { runProjectCheck } from './tasks/projects';
 import { PERSONAL_CHECK_INTERVAL, runPersonalCheck } from './tasks/personalAlerts';
 import { announceUpdateIfNeeded } from './tasks/announceUpdate';
 import { log, logError } from './utils/logger';
+import { RateLimiter } from './utils/rateLimit';
 import { handleShare, SHARE_ID } from './utils/share';
 import { shutdownRenderPool } from './utils/renderPool';
 
@@ -29,6 +31,13 @@ try {
 } catch (e) {
     console.error(`❌ ERREUR CRITIQUE : lecture de ${DB_FILE} impossible :`, e);
     process.exit(EXIT_CONFIG);
+}
+
+// Un envoi par SFTP laisse souvent ces fichiers lisibles par tous les comptes.
+const LEGACY_BACKUP = `${DB_FILE}.bak-avant-scrypt`;
+tightenPermissions([ENV_FILE, DB_FILE, LEGACY_BACKUP, CAMPUS_FILE]);
+if (fs.existsSync(LEGACY_BACKUP)) {
+    log('STORE', `${LEGACY_BACKUP} existe encore : cette copie garde d'anciens identifiants, même après /logout. Supprime-la.`);
 }
 
 const client = new Client({
@@ -172,11 +181,21 @@ client.once(Events.ClientReady, async (ready) => {
 });
 
 // --- ROUTAGE DES INTERACTIONS ---
+// Chaque commande interroge MyGes au nom de l'utilisateur et peut lancer un rendu :
+// sans limite, une seule personne pourrait saturer le bot ou faire bloquer son
+// adresse par le pare-feu de Kordis, pour tout le monde.
+const commandLimiter = new RateLimiter(10, 30_000);
+
 client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isChatInputCommand()) {
         const command = commands.get(interaction.commandName);
         if (!command) return;
         const who = `${interaction.user.tag} (${interaction.user.id})`;
+        if (!commandLimiter.hit(interaction.user.id)) {
+            log('CMD', `/${interaction.commandName} refusée (trop de commandes) : ${who}`);
+            await interaction.reply({ content: '⏳ Trop de commandes d\'un coup. Réessaie dans quelques secondes.', flags: MessageFlags.Ephemeral }).catch(() => {});
+            return;
+        }
         log('CMD', `/${interaction.commandName} par ${who}`);
         try {
             await command.execute(interaction);

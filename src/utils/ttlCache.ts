@@ -29,10 +29,17 @@ export class TtlCache<T> {
 
     /** `ttlMs` remplace, pour cette entrée seulement, la durée de vie par défaut. */
     set(key: string, value: T, ttlMs = this.ttlMs): void {
+        // Une entrée jamais relue ne doit pas survivre à sa durée de vie : ce sont
+        // des données personnelles, et de la mémoire retenue pour rien.
+        const now = Date.now();
+        for (const [k, entry] of this.map) {
+            if (entry.expiresAt <= now) this.map.delete(k);
+        }
+
         // Réinsertion : la clé repasse en fin d'ordre d'insertion, ce qui fait
         // de l'éviction ci-dessous un vrai « plus ancien d'abord ».
         this.map.delete(key);
-        this.map.set(key, { value, expiresAt: Date.now() + ttlMs });
+        this.map.set(key, { value, expiresAt: now + ttlMs });
 
         while (this.map.size > this.maxEntries) {
             const oldest = this.map.keys().next();

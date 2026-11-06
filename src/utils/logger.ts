@@ -12,8 +12,13 @@ function timestamp(): string {
     });
 }
 
+// Les messages citent des textes venus de MyGes (nom de projet…) : sans sauts de
+// ligne ni séquences d'échappement, ils ne peuvent ni imiter une ligne de journal,
+// ni effacer ce qu'affiche `tail -f`.
+const oneLine = (message: string) => message.replace(/[\p{Cc}\p{Cf}]+/gu, ' ');
+
 export function log(scope: string, message: string, ...rest: any[]) {
-    console.log(`[${timestamp()}] [${scope}] ${message}`, ...rest);
+    console.log(`[${timestamp()}] [${scope}] ${oneLine(message)}`, ...rest);
 }
 
 /**
@@ -29,5 +34,5 @@ function redact(arg: any): any {
 }
 
 export function logError(scope: string, message: string, ...rest: any[]) {
-    console.error(`[${timestamp()}] [${scope}] ${message}`, ...rest.map(redact));
+    console.error(`[${timestamp()}] [${scope}] ${oneLine(message)}`, ...rest.map(redact));
 }

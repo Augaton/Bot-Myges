@@ -16,3 +16,11 @@ export class BadCredentialsError extends Error {
     this.name = 'BadCredentialsError';
   }
 }
+
+/** Fichier MyGes trop lourd pour être envoyé sur Discord. */
+export class FileTooLargeError extends Error {
+  constructor() {
+    super('Fichier trop volumineux');
+    this.name = 'FileTooLargeError';
+  }
+}

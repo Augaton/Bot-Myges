@@ -10,6 +10,7 @@ import { log, logError } from '../utils/logger';
 import { apiErrorMessage, noSessionMessage } from '../utils/replies';
 import { addDays, dayOptions, fromKey, getMonday, sameDay, startOfDay, weekOptions } from '../utils/datePicker';
 import { shareRow, SHARE_ID } from '../utils/share';
+import { limitLifetime, tooManyClicks } from '../utils/collector';
 
 interface AgendaView {
     embeds: EmbedBuilder[];
@@ -154,6 +155,7 @@ const command: Command = {
 
         // Un seul collecteur pour boutons et menus déroulants.
         const col = msg.createMessageComponentCollector({ time: 300_000 });
+        limitLifetime(col);
 
         col.on('collect', async (i) => {
             try {
@@ -163,6 +165,7 @@ const command: Command = {
                 }
                 col.resetTimer(); // tant que l'utilisateur navigue, la session reste ouverte
                 if (i.customId === SHARE_ID) return; // traité par le routeur global
+                if (await tooManyClicks(i)) return;
                 await i.deferUpdate();
 
                 // --- Sélecteur de date ---

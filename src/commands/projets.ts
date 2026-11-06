@@ -1,15 +1,16 @@
 import { ChatInputCommandInteraction, EmbedBuilder, MessageFlags, SlashCommandBuilder } from 'discord.js';
 import { Command } from '../core/command';
-import { getProjects } from '../core/mygesData';
+import { getAssignments } from '../core/mygesData';
 import { getNextStep, snippet } from '../utils/format';
 import { logError } from '../utils/logger';
+import { md } from '../utils/markdown';
 import { apiErrorMessage, sessionFor } from '../utils/replies';
 import { shareRow } from '../utils/share';
 
 const command: Command = {
     data: new SlashCommandBuilder()
         .setName('projets')
-        .setDescription('Liste de tes projets en cours avec les prochaines étapes'),
+        .setDescription('Tes projets et TP en cours avec les prochaines étapes'),
 
     execute: async (interaction: ChatInputCommandInteraction) => {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -17,10 +18,10 @@ const command: Command = {
         if (!token) return;
 
         try {
-            const projects = await getProjects(interaction.user.id, token);
+            const projects = await getAssignments(interaction.user.id, token);
             const now = Date.now();
 
-            // On ne garde que les projets ayant une étape future
+            // On ne garde que les projets et TP ayant une étape future
             const active: any[] = [];
             for (const p of projects) {
                 const nextStep = getNextStep(p);
@@ -51,15 +52,13 @@ const command: Command = {
                 const diffDays = Math.ceil((step.date - now) / 86400000);
                 const urgent = diffDays <= 3 ? '🔴' : diffDays <= 7 ? '🟠' : '🟢';
 
-                const lines = [
-                    `📚 **${p.course_name}**`,
-                    `🎯 ${step.type} · 🗓️ <t:${ts}:D> (**<t:${ts}:R>**)`,
-                ];
+                const lines = [`🎯 ${md(step.type)} · 🗓️ <t:${ts}:D> (**<t:${ts}:R>**)`];
+                if (p.course_name) lines.unshift(`📚 **${md(p.course_name)}**`);
                 const desc = snippet(p.project_teaching_goals);
-                if (desc) lines.push(`> ${desc}`);
+                if (desc) lines.push(`> ${md(desc)}`);
 
                 // Discord plafonne le nom d'un champ à 256 caractères.
-                embed.addFields({ name: `${urgent} ${p.name || 'Projet'}`.slice(0, 256), value: lines.join('\n') });
+                embed.addFields({ name: `${urgent} ${p.practical ? '🧪 TP · ' : ''}${p.name || 'Projet'}`.slice(0, 256), value: lines.join('\n') });
             }
 
             await interaction.editReply({ embeds: [embed], components: [shareRow()] });

@@ -29,9 +29,14 @@ test('notes, rappel la veille et changement d\'agenda : premier passage silencie
     const projects = [{ project_id: 7, name: 'Projet Web', course_name: 'Web', steps: [{ psp_id: 1, psp_limit_date: now + 20 * H, psp_type: 'Rendu' }] }];
     const lesson = (startIn) => [{ reservation_id: 9, name: 'Anglais', start_date: now + startIn * H, end_date: now + (startIn + 2) * H, rooms: [] }];
 
-    // Passage 1 : connexion, notes (mémorisées), projets (rendu dans 20 h → rappel
-    // « demain »), agenda (mémorisé).
-    mockFetch([login(), json(200, { result: grades }), json(200, { result: projects }), json(200, { result: lesson(26) })]);
+    const absences = [{ course_name: 'Anglais', date: now - 48 * H, justified: true }];
+
+    // Passage 1 : connexion, notes et absences (mémorisées), projets et TP (rendu
+    // dans 20 h → rappel « demain »), agenda (mémorisé).
+    mockFetch([
+        login(), json(200, { result: grades }), json(200, { result: absences }), json(200, { result: projects }),
+        new Response(null, { status: 204 }), json(200, { result: lesson(26) }),
+    ]);
     await runPersonalCheck(client);
     assert.deepStrictEqual(titles(), ['📅 Rendu demain']);
 
@@ -39,22 +44,29 @@ test('notes, rappel la veille et changement d\'agenda : premier passage silencie
     t.mock.timers.tick(61 * 60_000);
     mockFetch([
         json(200, { result: [{ ...grades[0], grades: [15, 17.5] }] }),
+        json(200, { result: [...absences, { course_name: 'Réseaux', date: now - 2 * H, justified: false }] }),
         json(200, { result: projects }),
+        json(200, { result: [{ project_id: 8, name: 'TP Linux', steps: [{ psp_id: 2, psp_limit_date: now + 22 * H, psp_type: 'Rendu' }] }] }),
         json(200, { result: lesson(50) }),
     ]);
     await runPersonalCheck(client);
-    assert.deepStrictEqual(titles(), ['📅 Rendu demain', '📝 Nouvelle note !', '🗓️ Changement dans ton agenda']);
+    assert.deepStrictEqual(titles(), [
+        '📅 Rendu demain', '📝 Nouvelle note !', '🚫 Nouvelle absence', '📅 Rendu demain', '🗓️ Changement dans ton agenda',
+    ]);
     assert.match(dms[1].payload.embeds[0].data.fields[0].value, /Note : \*\*17,5\*\*\/20/);
-    assert.match(dms[2].payload.embeds[0].data.fields[0].name, /Cours déplacé · Anglais/);
+    assert.match(dms[2].payload.embeds[0].data.description, /Réseaux.*non justifiée/);
+    assert.doesNotMatch(dms[2].payload.embeds[0].data.description, /Anglais/); // déjà connue
+    assert.match(dms[3].payload.embeds[0].data.description, /TP Linux/);
+    assert.match(dms[4].payload.embeds[0].data.fields[0].name, /Cours déplacé · Anglais/);
 
-    // Ni les notes ni l'agenda ne sont enregistrés en clair.
-    assert.ok(!JSON.stringify(store.loadData().alerts).includes('Anglais'));
+    // Ni les notes, ni les absences, ni l'agenda ne sont enregistrés en clair.
+    assert.ok(!/Anglais|Réseaux/.test(JSON.stringify(store.loadData().alerts)));
 });
 
 test('alertes désactivées : aucun appel à MyGes, aucun MP', async (t) => {
     // Une demi-heure après le passage précédent : u1 n'a encore rien à relire.
     t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-01T11:30:00Z') });
-    register('u2', { grades: false, reminders: false, agenda: false, digest: false });
+    register('u2', { grades: false, absences: false, reminders: false, agenda: false, digest: false });
     const before = dms.length;
     const calls = mockFetch([]);
     await runPersonalCheck(client);
@@ -65,8 +77,8 @@ test('alertes désactivées : aucun appel à MyGes, aucun MP', async (t) => {
 test('programme du matin : à partir de 7 h, une seule fois par jour, cours du jour uniquement', async (t) => {
     // 6 h 50 à Paris (UTC+2 en octobre).
     t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-02T04:50:00Z') });
-    register('u1', { grades: false, reminders: false, agenda: false });
-    register('u3', { grades: false, reminders: false, agenda: false, digest: true });
+    register('u1', { grades: false, absences: false, reminders: false, agenda: false });
+    register('u3', { grades: false, absences: false, reminders: false, agenda: false, digest: true });
 
     let calls = mockFetch([]);
     await runPersonalCheck(client);
@@ -95,8 +107,8 @@ test('agenda : un cours qui commence ne fait pas réécrire (ni rechiffrer) la l
     // 8 h à Paris ; tous les autres comptes de ce fichier sont mis en sommeil.
     t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-03T06:00:00Z') });
     const now = Date.now();
-    for (const id of ['u1', 'u2', 'u3']) register(id, { grades: false, reminders: false, agenda: false, digest: false });
-    register('u4', { grades: false, reminders: false, agenda: true, digest: false });
+    for (const id of ['u1', 'u2', 'u3']) register(id, { grades: false, absences: false, reminders: false, agenda: false, digest: false });
+    register('u4', { grades: false, absences: false, reminders: false, agenda: true, digest: false });
     const week = [
         { reservation_id: 1, name: 'Anglais', start_date: now + 0.5 * H, end_date: now + 2 * H, rooms: [] },
         { reservation_id: 2, name: 'Réseaux', start_date: now + 26 * H, end_date: now + 28 * H, rooms: [] },
@@ -114,8 +126,8 @@ test('agenda : un cours qui commence ne fait pas réécrire (ni rechiffrer) la l
 
 test('reconnexion à un autre compte pendant une lecture : rien de l\'ancien compte n\'est mémorisé', async (t) => {
     t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-04T10:00:00Z') });
-    register('u4', { grades: false, reminders: false, agenda: false, digest: false });
-    register('u5', { grades: true, reminders: false, agenda: false, digest: false });
+    register('u4', { grades: false, absences: false, reminders: false, agenda: false, digest: false });
+    register('u5', { grades: true, absences: false, reminders: false, agenda: false, digest: false });
     const responses = [login()];
     globalThis.fetch = async () => {
         const next = responses.shift();

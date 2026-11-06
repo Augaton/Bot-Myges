@@ -1,23 +1,25 @@
 // --- ALERTES PERSONNELLES EN MP ---
 // Pour chaque utilisateur connecté (réglable via /alertes) :
 //  • un MP dès qu'une nouvelle note apparaît sur MyGes ;
-//  • un MP la veille (24 h avant) et 2 h avant chaque échéance de projet ;
+//  • un MP dès qu'une nouvelle absence y est enregistrée ;
+//  • un MP la veille (24 h avant) et 2 h avant chaque échéance de projet ou de TP ;
 //  • un MP quand un cours de la semaine à venir est annulé, déplacé, ajouté ou
 //    change de salle ;
 //  • sur demande, un MP chaque matin avec les cours du jour.
-import { Client, EmbedBuilder, escapeMarkdown } from 'discord.js';
-import { getGrades, getProjects, getTimetable } from '../core/mygesData';
+import { Client, EmbedBuilder } from 'discord.js';
+import { getAbsences, getAssignments, getGrades, getTimetable } from '../core/mygesData';
 import { getSession, getUserAlerts, loadData, saveData, UserAlerts } from '../core/store';
 import { getCurrentYear } from '../config';
 import { decrypt, encrypt, fingerprint } from '../crypto';
 import { sendDM } from '../utils/dm';
 import { courseName, coursePlace, getCourseIcon, snippet } from '../utils/format';
 import { log, logError } from '../utils/logger';
+import { md } from '../utils/markdown';
 import { toSubject } from '../utils/notesImage';
 import type { GesAuthenticationToken } from '../myges/types/auth';
 
-// Cycle court pour tenir l'heure des rappels « 2 h avant » ; notes, projets et
-// agenda ne sont pour autant relus auprès de MyGes qu'une fois par heure et par personne.
+// Cycle court pour tenir l'heure des rappels « 2 h avant » ; notes, absences, projets
+// et agenda ne sont pour autant relus auprès de MyGes qu'une fois par heure et par personne.
 export const PERSONAL_CHECK_INTERVAL = 15 * 60 * 1000;
 const REFRESH_MS = 60 * 60 * 1000;
 // Pause entre deux utilisateurs interrogeant MyGes : on reste discret.
@@ -37,6 +39,7 @@ const FOOTER = { text: 'Désactiver ces MP : /alertes' };
 // projets d'un autre compte) et l'ancienne entrée est libérée d'elle-même.
 interface Memo {
     gradesAt: number;
+    absencesAt: number;
     agendaAt: number;
     projects?: { at: number; list: any[] };
 }
@@ -61,7 +64,9 @@ interface UserCheck {
 // Format des identifiants de notes. En changer rend méconnaissables toutes les
 // empreintes déjà mémorisées : elles sont alors réamorcées sans MP.
 // 1 : position dans la liste. 2 : rang parmi les notes de même valeur.
-const GRADE_ID_FORMAT = 2;
+// 3 : empreinte propre à chaque compte (deux camarades ayant la même note ne se
+// reconnaissent pas en comparant leurs empreintes dans une sauvegarde).
+const GRADE_ID_FORMAT = 3;
 
 export interface GradeEvent {
     id: string; // identifiant stable de la note (jamais stocké en clair)
@@ -123,7 +128,7 @@ async function checkGrades({ client, userId, alerts, current }: UserCheck, token
     const year = getCurrentYear();
     const raw = await getGrades(userId, token);
     if (!Array.isArray(raw) || !current()) return false;
-    const keyed = gradeEvents(raw).map((event) => ({ event, key: fingerprint(event.id) }));
+    const keyed = gradeEvents(raw).map((event) => ({ event, key: fingerprint(`${userId}|${event.id}`) }));
 
     // Premier passage, nouvelle année scolaire ou nouveau format d'identifiants :
     // on mémorise sans alerter, sinon tout l'historique arriverait d'un coup.
@@ -143,6 +148,66 @@ async function checkGrades({ client, userId, alerts, current }: UserCheck, token
     alerts.knownGrades = [...known, ...new Set(fresh.map((k) => k.key))];
     await sendDM(client, userId, { embeds: [gradesEmbed(fresh.map((k) => k.event))] });
     log('ALERTES', `${userId} : ${fresh.length} nouvelle(s) note(s) signalée(s) en MP.`);
+    return true;
+}
+
+// ---------------------------------------------------------------- Absences
+
+export interface AbsenceEvent {
+    id: string; // identifiant stable de l'absence (jamais stocké en clair)
+    course: string;
+    at: number;
+    justified: boolean;
+}
+
+/**
+ * Absences lisibles, comparables d'un cycle à l'autre. L'identifiant ignore
+ * `justified` : une absence justifiée après coup n'est pas une nouvelle absence.
+ */
+export function absenceEvents(raw: any[]): AbsenceEvent[] {
+    const events: AbsenceEvent[] = [];
+    for (const a of raw) {
+        const at = new Date(a?.date).getTime();
+        if (!Number.isFinite(at)) continue;
+        const course = String(a?.course_name || 'Matière inconnue');
+        events.push({ id: `${at}|${course}`, course, at, justified: !!a?.justified });
+    }
+    return events;
+}
+
+function absencesEmbed(events: AbsenceEvent[]): EmbedBuilder {
+    const lines = events
+        .sort((a, b) => a.at - b.at)
+        .map((e) => `• **${md(e.course)}** · <t:${Math.floor(e.at / 1000)}:f> · ${e.justified ? '✅ justifiée' : '❌ non justifiée'}`);
+    return new EmbedBuilder()
+        .setTitle(events.length > 1 ? `🚫 ${events.length} nouvelles absences` : '🚫 Nouvelle absence')
+        .setDescription(lines.join('\n').slice(0, 4096))
+        .setColor(0xe74c3c)
+        .setFooter({ text: `Détail avec /absences · ${FOOTER.text}` })
+        .setTimestamp();
+}
+
+/** Compare les absences à celles déjà vues ; envoie un MP s'il y en a de nouvelles. Vrai si l'état a changé. */
+async function checkAbsences({ client, userId, alerts, current }: UserCheck, token: GesAuthenticationToken): Promise<boolean> {
+    const year = getCurrentYear();
+    const raw = await getAbsences(userId, token);
+    if (!Array.isArray(raw) || !current()) return false;
+    const keyed = absenceEvents(raw).map((event) => ({ event, key: fingerprint(`${userId}|${event.id}`) }));
+
+    // Premier passage ou nouvelle année scolaire : mémorisé sans alerter.
+    if (alerts.absencesYear !== year || !alerts.knownAbsences) {
+        alerts.absencesYear = year;
+        alerts.knownAbsences = keyed.map((k) => k.key);
+        return true;
+    }
+
+    const known = new Set(alerts.knownAbsences);
+    const fresh = keyed.filter((k) => !known.has(k.key));
+    if (!fresh.length) return false;
+
+    alerts.knownAbsences = [...known, ...new Set(fresh.map((k) => k.key))];
+    await sendDM(client, userId, { embeds: [absencesEmbed(fresh.map((k) => k.event))] });
+    log('ALERTES', `${userId} : ${fresh.length} nouvelle(s) absence(s) signalée(s) en MP.`);
     return true;
 }
 
@@ -203,15 +268,24 @@ function reminderEmbed(d: Deadline, threshold: (typeof REMINDER_THRESHOLDS)[numb
     const ts = Math.floor(d.at / 1000);
     const embed = new EmbedBuilder()
         .setTitle(threshold.title)
-        .setDescription(`**${d.project}**${d.course ? `\n📚 ${d.course}` : ''}`.slice(0, 4096))
+        .setDescription(`**${md(d.project)}**${d.course ? `\n📚 ${md(d.course)}` : ''}`.slice(0, 4096))
         .setColor(threshold.color)
         .addFields(
-            { name: '🎯 Étape', value: d.type.slice(0, 1024), inline: true },
+            { name: '🎯 Étape', value: md(d.type).slice(0, 1024), inline: true },
             { name: '🗓️ Échéance', value: `<t:${ts}:F> (<t:${ts}:R>)`, inline: true },
         )
         .setFooter(FOOTER);
-    if (d.desc) embed.addFields({ name: '📝 Consigne', value: d.desc.slice(0, 1024) });
+    if (d.desc) embed.addFields({ name: '📝 Consigne', value: md(d.desc).slice(0, 1024) });
     return embed;
+}
+
+function readReminded(alerts: UserAlerts): Record<string, number> {
+    if (!alerts.remindedSnapshot) return alerts.reminded ?? {};
+    try {
+        return JSON.parse(decrypt(alerts.remindedSnapshot));
+    } catch {
+        return {}; // illisible : au pire, un rappel de plus
+    }
 }
 
 /** Envoie les rappels arrivés à échéance. Vrai si l'état a changé. */
@@ -219,25 +293,29 @@ async function checkReminders({ client, userId, alerts, memo, current }: UserChe
     const now = Date.now();
     if (!memo.projects || now - memo.projects.at >= REFRESH_MS) {
         if (!token) return false;
-        memo.projects = { at: now, list: await getProjects(userId, token) };
+        memo.projects = { at: now, list: await getAssignments(userId, token) };
     }
     if (!current()) return false;
 
-    let changed = false;
-    alerts.reminded ??= {};
-    for (const [id, at] of Object.entries(alerts.reminded)) {
+    const reminded = readReminded(alerts);
+    let changed = !!alerts.reminded; // ancien format : rechiffré dès ce passage
+    for (const [id, at] of Object.entries(reminded)) {
         if (at < now) {
-            delete alerts.reminded[id];
+            delete reminded[id];
             changed = true;
         }
     }
 
-    const due = dueReminders(upcomingDeadlines(memo.projects.list, now), now, alerts.reminded);
-    if (!due.length) return changed;
-
     // Marqués avant l'envoi : des MP fermés ne doivent pas provoquer une
     // nouvelle tentative (et un nouveau log) tous les quarts d'heure.
-    for (const r of due) alerts.reminded[r.id] = r.deadline.at;
+    const due = dueReminders(upcomingDeadlines(memo.projects.list, now), now, reminded);
+    for (const r of due) reminded[r.id] = r.deadline.at;
+    if (changed || due.length) {
+        alerts.remindedSnapshot = encrypt(JSON.stringify(reminded));
+        delete alerts.reminded;
+    }
+    if (!due.length) return changed;
+
     // Un MP accepte jusqu'à 10 embeds.
     for (let i = 0; i < due.length; i += 10) {
         await sendDM(client, userId, { embeds: due.slice(i, i + 10).map((r) => reminderEmbed(r.deadline, r.threshold)) });
@@ -328,10 +406,6 @@ export function agendaChanges(courses: any[], previous: AgendaSnapshot | null, n
 }
 
 const slot = (c: SeenCourse) => `<t:${Math.floor(c.start / 1000)}:F> – <t:${Math.floor(c.end / 1000)}:t>`;
-
-// Noms de cours et de salles viennent de MyGes : échappés pour qu'un « * », un
-// « ~ » ou un lien masqué ne détourne pas la mise en forme du MP.
-const md = (text: string) => escapeMarkdown(text, { maskedLink: true, heading: true });
 
 function agendaField(change: AgendaChange): { name: string; value: string } {
     const { before, after } = change;
@@ -468,19 +542,20 @@ async function checkAllUsers(client: Client) {
         const creds = data.users[userId];
         if (!creds) continue; // déconnecté pendant le cycle
         let memo = memos.get(creds);
-        if (!memo) memos.set(creds, (memo = { gradesAt: 0, agendaAt: 0 }));
+        if (!memo) memos.set(creds, (memo = { gradesAt: 0, absencesAt: 0, agendaAt: 0 }));
 
         const alerts = getUserAlerts(data, userId);
         const now = Date.now();
         const wantsGrades = alerts.grades && now - memo.gradesAt >= REFRESH_MS;
+        const wantsAbsences = alerts.absences && now - memo.absencesAt >= REFRESH_MS;
         const projectsStale = now - (memo.projects?.at ?? 0) >= REFRESH_MS;
         const wantsAgenda = (alerts.agenda && now - memo.agendaAt >= REFRESH_MS) || digestDue(alerts, now);
-        if (!wantsGrades && !alerts.reminders && !wantsAgenda) continue;
+        if (!wantsGrades && !wantsAbsences && !alerts.reminders && !wantsAgenda) continue;
 
         // Une session (et donc un appel MyGes) n'est nécessaire que pour relire
-        // notes, projets ou agenda ; sinon, les rappels se calculent sur la dernière lecture.
+        // notes, absences, projets ou agenda ; sinon, les rappels se calculent sur la dernière lecture.
         let token: GesAuthenticationToken | null = null;
-        if (wantsGrades || wantsAgenda || (alerts.reminders && projectsStale)) {
+        if (wantsGrades || wantsAbsences || wantsAgenda || (alerts.reminders && projectsStale)) {
             if (pause) await new Promise((r) => setTimeout(r, PAUSE_BETWEEN_USERS_MS));
             pause = true;
             token = await getSession(userId);
@@ -495,6 +570,14 @@ async function checkAllUsers(client: Client) {
                 memo.gradesAt = Date.now();
             } catch (e) {
                 logError('ALERTES', `${userId} : vérification des notes impossible :`, e);
+            }
+        }
+        if (wantsAbsences && token) {
+            try {
+                changed = (await checkAbsences(check, token)) || changed;
+                memo.absencesAt = Date.now();
+            } catch (e) {
+                logError('ALERTES', `${userId} : vérification des absences impossible :`, e);
             }
         }
         if (alerts.reminders) {

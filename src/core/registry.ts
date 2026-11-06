@@ -7,6 +7,7 @@ import prochain from '../commands/prochain';
 import agenda from '../commands/agenda';
 import notes from '../commands/notes';
 import absences from '../commands/absences';
+import documents from '../commands/documents';
 import projets from '../commands/projets';
 import profil from '../commands/profil';
 import news from '../commands/news';
@@ -22,7 +23,7 @@ import exportIcs from '../commands/export';
 
 // Ordre conservé pour l'affichage dans Discord.
 const all: Command[] = [
-    login, logout, alertes, prochain, agenda, exportIcs, notes, absences, projets, profil,
+    login, logout, alertes, prochain, agenda, exportIcs, notes, absences, documents, projets, profil,
     news, profs, trombi, campus, changelog, help, ping, config,
 ];
 
