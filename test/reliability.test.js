@@ -645,3 +645,28 @@ test('liste des années : gardée 3 heures, elle ne change qu\'à la rentrée', 
     await mygesData.getCurrentYearFor('annees-ttl', token);
     assert.strictEqual(seen.reads, 2);
 });
+
+test('annonce de mise à jour : une version corrective n\'est pas annoncée, une nouvelle version mineure l\'est', async (t) => {
+    quiet(t);
+    clearAccounts();
+    const { announceUpdateIfNeeded, isPatchOnly } = dist('tasks/announceUpdate.js');
+    const { BOT_VERSION } = dist('config.js');
+    assert.strictEqual(isPatchOnly('v4.5.0', 'v4.5.1'), true);
+    assert.strictEqual(isPatchOnly('v4.4.0', 'v4.5.1'), false);
+    assert.strictEqual(isPatchOnly(undefined, 'v4.5.1'), false);
+
+    const [major, minor] = BOT_VERSION.replace(/^v/, '').split('.');
+    const data = store.loadData();
+    data.guilds = {
+        correctif: { updateChannelId: 'salon-a', lastAnnouncedVersion: `v${major}.${minor}.999`, knownProjectIds: [] },
+        nouvelle: { updateChannelId: 'salon-b', lastAnnouncedVersion: `v${Number(major) - 1}.0.0`, knownProjectIds: [] },
+    };
+    store.saveData(data);
+    const posted = [];
+    const client = { user: null, channels: { fetch: async (id) => ({ isSendable: () => true, send: async () => posted.push(id) }) } };
+    await announceUpdateIfNeeded(client);
+    assert.deepStrictEqual(posted, ['salon-b']);
+    const after = store.loadData().guilds;
+    assert.strictEqual(after.correctif.lastAnnouncedVersion, BOT_VERSION, 'mémorisée sans annonce');
+    assert.strictEqual(after.nouvelle.lastAnnouncedVersion, BOT_VERSION);
+});

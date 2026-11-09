@@ -11,6 +11,7 @@ Bot Discord tout-en-un pour MyGES : agenda, notes, absences et projets directeme
 | `/login`, `/logout` | Se connecter à MyGES, ou se déconnecter et supprimer ses données |
 | `/panel` | Lien vers le panel étudiant |
 | `/abonnement` | Lien d'abonnement : ton calendrier suit ton agenda tout seul |
+| `/serveurs` | Serveurs où est le bot et leur configuration, en lecture seule (propriétaire, `OWNER_IDS`) |
 | `/documents` | Supports de cours et documents annuels |
 | `/agenda` | Cours du jour ou de la semaine, avec navigation |
 | `/prochain` | Prochain cours à venir |

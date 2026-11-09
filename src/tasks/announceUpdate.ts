@@ -4,6 +4,12 @@ import { getGuildConfig, loadData, saveData } from '../core/store';
 import { buildChangelogEmbed } from '../commands/changelog';
 import { log, logError } from '../utils/logger';
 
+/** Même version mineure (v4.5.0 → v4.5.1) : un correctif, rien de nouveau à annoncer. */
+export function isPatchOnly(previous: string | undefined, next: string): boolean {
+    const minor = (version: string) => version.replace(/^v/, '').split('.').slice(0, 2).join('.');
+    return !!previous && minor(previous) === minor(next);
+}
+
 // --- ANNONCE DE MISE À JOUR ---
 // Au démarrage, pour chaque serveur ayant configuré un salon de MAJ (/config),
 // poste le changelog si BOT_VERSION a changé depuis la dernière annonce sur CE
@@ -18,6 +24,14 @@ export async function announceUpdateIfNeeded(client: Client) {
         if (!cfg.updateChannelId) continue; // salon de MAJ non configuré
         if (cfg.lastAnnouncedVersion === BOT_VERSION) {
             log('MAJ', `Serveur ${guildId} : ${BOT_VERSION} déjà annoncée.`);
+            continue;
+        }
+
+        // Version corrective : l'annonce de la version mineure, déjà faite, suffit.
+        if (isPatchOnly(cfg.lastAnnouncedVersion, BOT_VERSION)) {
+            log('MAJ', `Serveur ${guildId} : ${BOT_VERSION} est un correctif de ${cfg.lastAnnouncedVersion}, pas d'annonce.`);
+            cfg.lastAnnouncedVersion = BOT_VERSION;
+            saveData(data);
             continue;
         }
 

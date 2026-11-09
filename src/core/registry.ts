@@ -19,6 +19,7 @@ import changelog from '../commands/changelog';
 import help from '../commands/help';
 import ping from '../commands/ping';
 import config from '../commands/config';
+import serveurs from '../commands/serveurs';
 import alertes from '../commands/alertes';
 import exportIcs from '../commands/export';
 import abonnement from '../commands/abonnement';
@@ -26,7 +27,7 @@ import abonnement from '../commands/abonnement';
 // Ordre conservé pour l'affichage dans Discord.
 const all: Command[] = [
     login, logout, panel, alertes, prochain, agenda, exportIcs, abonnement, notes, absences, documents, projets, profil,
-    news, profs, trombi, campus, changelog, help, ping, config,
+    news, profs, trombi, campus, changelog, help, ping, config, serveurs,
 ];
 
 // Map name -> Command pour le routage des interactions.
