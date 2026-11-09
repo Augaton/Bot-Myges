@@ -140,6 +140,11 @@ function supervise(name) {
     const state = { child: null, timer: null };
     running.set(name, state);
 
+    function startAgainLater() {
+        state.timer = setTimeout(start, delay);
+        delay = Math.min(delay * 2, MAX_DELAY_MS);
+    }
+
     function start() {
         state.timer = null;
         const startedAt = Date.now();
@@ -150,16 +155,28 @@ function supervise(name) {
             ...process.env,
         };
         if (name === 'panel') for (const secret of BOT_SECRETS) delete env[secret];
-        const child = spawn(process.execPath, [...process.execArgv, path.join(__dirname, 'dist', ENTRIES[name]), ...process.argv.slice(2)], {
-            stdio: ['inherit', 'pipe', 'pipe'],
-            env,
-        });
+        let child;
+        try {
+            child = spawn(process.execPath, [...process.execArgv, path.join(__dirname, 'dist', ENTRIES[name]), ...process.argv.slice(2)], {
+                stdio: ['inherit', 'pipe', 'pipe'],
+                env,
+            });
+        } catch (e) {
+            // Mémoire ou processus épuisés : le superviseur doit survivre pour relancer.
+            say(`Lancement de ${name} impossible (${e.code ?? e.message}), relance dans ${delay / 1000} s...`);
+            startAgainLater();
+            return;
+        }
+        // Échec signalé par événement (EAGAIN, EMFILE…) : sans écouteur, il tuerait le
+        // superviseur, donc le bot et le panel. 'close' suit et relance. Sur EMFILE, les
+        // flux n'existent pas.
+        child.on('error', (e) => say(`Erreur sur ${name} : ${e.code ?? e.message}.`));
         state.child = child;
-        child.stdout.on('data', (chunk) => {
+        child.stdout?.on('data', (chunk) => {
             process.stdout.write(chunk);
             writeLog(chunk);
         });
-        child.stderr.on('data', (chunk) => {
+        child.stderr?.on('data', (chunk) => {
             process.stderr.write(chunk);
             writeLog(chunk);
         });
@@ -184,8 +201,7 @@ function supervise(name) {
             }
             if (Date.now() - startedAt > STABLE_AFTER_MS) delay = MIN_DELAY_MS;
             say(`${name} arrêté (${signal ?? `code ${code}`}), relance dans ${delay / 1000} s...`);
-            state.timer = setTimeout(start, delay);
-            delay = Math.min(delay * 2, MAX_DELAY_MS);
+            startAgainLater();
         });
     }
 

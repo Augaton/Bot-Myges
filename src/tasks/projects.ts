@@ -81,6 +81,15 @@ export async function checkNewProjects(client: Client) {
         // 3. Diffusion sur chaque serveur, avec son propre historique.
         for (const guildId of guilds) {
             const cfg = getGuildConfig(data, guildId);
+            // Première lecture pour ce compte de référence : l'historique n'est pas une nouveauté.
+            if (!cfg.projectsSeeded) {
+                const ids = projects.map((p) => p.project_id).filter((id) => id != null);
+                cfg.knownProjectIds = [...new Set([...cfg.knownProjectIds, ...ids])];
+                cfg.projectsSeeded = true;
+                saveData(data);
+                log('PROJET', `Serveur ${guildId} : ${ids.length} projet(s) existant(s) marqué(s) comme déjà vus.`);
+                continue;
+            }
             const channel = await client.channels.fetch(cfg.announcementChannelId!).catch(() => null);
             if (!channel?.isSendable()) {
                 logError('PROJET', `Serveur ${guildId} : salon d'alertes ${cfg.announcementChannelId} introuvable ou inaccessible.`);

@@ -11,31 +11,26 @@ export function buildChangelogEmbed(client: Client): EmbedBuilder {
     // Annonce publique : le lien du panel n'y figure que s'il a été renseigné.
     const panelLink = panelPublicUrl();
     return new EmbedBuilder()
-        .setTitle(`🚀 Mise à jour ${BOT_VERSION} - "Ton école dans ta poche"`)
-        .setDescription('Le panel étudiant s\'installe sur ton téléphone et s\'enrichit : annuaire avec photos, événements et agenda au mois.')
+        .setTitle(`🚀 Mise à jour ${BOT_VERSION} - "Reste connecté"`)
+        .setDescription('Le panel étudiant garde ta session si tu le demandes, et le bot tient mieux le coup quand MyGES a des soucis.')
         .setColor(0x5865f2)
         .setThumbnail(client.user?.displayAvatarURL() || null)
         .addFields(
             {
                 name: '🌐 Le panel étudiant',
                 value:
-                    '• `/panel` te donne le lien, en message visible par toi seul.\n' +
-                    '• **Installe-le** sur ton téléphone, comme une application.\n' +
-                    '• Service non officiel, sans lien avec MyGES ni le Réseau GES.' +
+                    '• **Rester connecté** : une case à cocher, à éviter sur un ordinateur partagé. Ton mot de passe n\'est jamais enregistré.\n' +
+                    '• Le **prochain examen** à l\'accueil, et l\'agenda s\'ouvre sur aujourd\'hui sur ton téléphone.\n' +
+                    '• Pages plus légères et plus rapides à charger.\n' +
+                    '• `/panel` te donne le lien. Service non officiel, sans lien avec MyGES ni le Réseau GES.' +
                     (panelLink ? `\n• Accès : ${panelLink}` : ''),
             },
             {
-                name: '👥 Annuaire et équipes',
+                name: '🔔 Alertes plus fiables',
                 value:
-                    '• Ta classe et tes intervenants, avec leurs photos, relayées sans jamais être enregistrées.\n' +
-                    '• Les équipes ont leur propre page dans chaque projet.',
-            },
-            {
-                name: '🗓️ Agenda et événements',
-                value:
-                    '• **Vue au mois** : repère d\'un coup d\'œil tes semaines de cours, pratique en alternance.\n' +
-                    '• **Export** de 12 semaines vers Google Agenda ou ton téléphone.\n' +
-                    '• Un écran pour tous les **événements** de l\'école.',
+                    '• Mot de passe changé sur MyGES : le bot te prévient une fois en MP et cesse d\'essayer, pour ne pas faire verrouiller ton compte.\n' +
+                    '• MyGES en panne : tes rappels de rendu partent quand même.\n' +
+                    '• Les projets encore en brouillon ne sont plus annoncés.',
             },
             {
                 name: '✅ Aucune action requise',

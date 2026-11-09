@@ -8,7 +8,7 @@
 //  • sur demande, un MP chaque matin avec les cours du jour.
 import { Client, EmbedBuilder } from 'discord.js';
 import { getAbsences, getAssignments, getGrades, getTimetable } from '../core/mygesData';
-import { getSession, getUserAlerts, loadData, saveData, UserAlerts } from '../core/store';
+import { getSession, getUserAlerts, loadData, loginFailure, saveData, SavedData, UserAlerts } from '../core/store';
 import { getCurrentYear } from '../config';
 import { decrypt, encrypt, fingerprint } from '../crypto';
 import { sendDM } from '../utils/dm';
@@ -291,11 +291,16 @@ function readReminded(alerts: UserAlerts): Record<string, number> {
 /** Envoie les rappels arrivés à échéance. Vrai si l'état a changé. */
 async function checkReminders({ client, userId, alerts, memo, current }: UserCheck, token: GesAuthenticationToken | null): Promise<boolean> {
     const now = Date.now();
-    if (!memo.projects || now - memo.projects.at >= REFRESH_MS) {
-        if (!token) return false;
-        memo.projects = { at: now, list: await getAssignments(userId, token) };
+    if (token && (!memo.projects || now - memo.projects.at >= REFRESH_MS)) {
+        try {
+            memo.projects = { at: now, list: await getAssignments(userId, token) };
+        } catch (e) {
+            if (!memo.projects) throw e;
+            // MyGes en panne : mieux vaut un rappel sur la dernière lecture que pas de rappel.
+            logError('ALERTES', `${userId} : projets non relus, rappels sur la dernière lecture :`, e);
+        }
     }
-    if (!current()) return false;
+    if (!memo.projects || !current()) return false;
 
     const reminded = readReminded(alerts);
     let changed = !!alerts.reminded; // ancien format : rechiffré dès ce passage
@@ -534,9 +539,37 @@ export async function runPersonalCheck(client: Client) {
     }
 }
 
+/** Mot de passe refusé : un MP, une seule fois, sinon l'étudiant croit ses alertes actives. */
+async function warnRefused(client: Client, data: SavedData, userId: string, creds: SavedData['users'][string]) {
+    if (loginFailure(userId) !== 'bad-credentials' || creds.refusedNotified) return;
+    creds.refusedNotified = true;
+    saveData(data);
+    await sendDM(client, userId, {
+        embeds: [new EmbedBuilder()
+            .setTitle('🔒 Alertes en pause')
+            .setColor(0xffa500)
+            .setDescription('MyGES refuse ton mot de passe enregistré. Tes alertes sont en pause, et le bot ne réessaie plus pour éviter de faire verrouiller ton compte. Refais `/login` pour les relancer.')],
+    });
+}
+
 async function checkAllUsers(client: Client) {
     const data = loadData();
     let pause = false;
+
+    // D'abord les rappels : ils se calculent sur la dernière lecture, sans appel à MyGes.
+    // Une panne, qui peut faire durer le cycle bien plus longtemps, ne les retarde pas.
+    for (const userId of Object.keys(data.users)) {
+        const creds = data.users[userId];
+        const memo = memos.get(creds);
+        const alerts = getUserAlerts(data, userId);
+        if (!memo?.projects || !alerts.reminders) continue;
+        const check: UserCheck = { client, userId, alerts, memo, current: () => data.users[userId] === creds };
+        try {
+            if ((await checkReminders(check, null)) && check.current()) saveData(data);
+        } catch (e) {
+            logError('ALERTES', `${userId} : vérification des rendus impossible :`, e);
+        }
+    }
 
     for (const userId of Object.keys(data.users)) {
         const creds = data.users[userId];
@@ -559,7 +592,10 @@ async function checkAllUsers(client: Client) {
             if (pause) await new Promise((r) => setTimeout(r, PAUSE_BETWEEN_USERS_MS));
             pause = true;
             token = await getSession(userId);
-            if (!token) continue; // pas de session (MyGes en panne, mot de passe changé…)
+            if (!token) {
+                await warnRefused(client, data, userId, creds);
+                continue; // pas de session (MyGes en panne, mot de passe changé…)
+            }
         }
 
         const check: UserCheck = { client, userId, alerts, memo, current: () => data.users[userId] === creds };

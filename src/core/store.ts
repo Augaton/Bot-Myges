@@ -22,6 +22,9 @@ export interface GuildConfig {
     referenceUserId?: string;
     // Projets déjà annoncés sur CE serveur (évite les doublons).
     knownProjectIds: number[];
+    // Faux tant qu'aucun cycle n'a lu les projets du compte de référence : le premier
+    // cycle réussi les marque comme vus, sans les annoncer.
+    projectsSeeded?: boolean;
     // Dernière version du bot annoncée sur CE serveur.
     lastAnnouncedVersion?: string;
 }
@@ -50,7 +53,7 @@ export interface UserAlerts {
 }
 
 export interface SavedData {
-    users: { [discordId: string]: { user: EncryptedData; pass: EncryptedData } };
+    users: { [discordId: string]: { user: EncryptedData; pass: EncryptedData; refusedNotified?: boolean } };
     guilds: { [guildId: string]: GuildConfig };
     alerts: { [discordId: string]: UserAlerts };
     crypto?: KdfParams;
@@ -173,6 +176,7 @@ export function getGuildConfig(data: SavedData, guildId: string): GuildConfig {
     if (!data.guilds[guildId]) data.guilds[guildId] = { knownProjectIds: [] };
     const cfg = data.guilds[guildId];
     if (!Array.isArray(cfg.knownProjectIds)) cfg.knownProjectIds = [];
+    cfg.projectsSeeded ??= cfg.knownProjectIds.length > 0; // ancienne configuration
     return cfg;
 }
 
@@ -190,7 +194,8 @@ export function saveData(data: SavedData = loadData()) {
     // être lisible par les autres comptes de la machine.
     const tmp = `${DB_FILE}.tmp`;
     try {
-        fs.writeFileSync(tmp, JSON.stringify(data, null, 2), { mode: 0o600 });
+        // flush : sans lui, une panne de la machine peut laisser un fichier vide après le renommage.
+        fs.writeFileSync(tmp, JSON.stringify(data, null, 2), { mode: 0o600, flush: true });
         fs.renameSync(tmp, DB_FILE);
         fs.chmodSync(DB_FILE, 0o600); // le renommage conserve les droits d'un fichier préexistant
     } catch (e) {
@@ -262,6 +267,17 @@ export function closeSession(userId: string) {
  * Session MyGes de l'utilisateur, rétablie si besoin à partir des identifiants
  * enregistrés. null s'il n'a pas de compte ou si la reconnexion échoue.
  */
+/**
+ * Identifiants refusés : on n'insiste pas, des essais répétés avec un mot de passe
+ * périmé risqueraient de faire verrouiller le compte MyGes. Seul un nouveau /login
+ * lève le blocage. Après une panne, on attend un peu avant de réessayer.
+ */
+function loginBlocked(userId: string): boolean {
+    const failure = failures.get(userId);
+    if (!failure) return false;
+    return failure.badCredentials || Date.now() - failure.at < RETRY_AFTER_FAILURE_MS;
+}
+
 export async function getSession(userId: string): Promise<GesAuthenticationToken | null> {
     const active = sessions.get(userId);
     if (active) return active;
@@ -269,12 +285,7 @@ export async function getSession(userId: string): Promise<GesAuthenticationToken
     const creds = loadData().users[userId];
     if (!creds) return null;
 
-    const failure = failures.get(userId);
-    // Identifiants refusés : on n'insiste pas, des essais répétés avec un mot de
-    // passe périmé risqueraient de faire verrouiller le compte MyGes. Seul un
-    // nouveau /login lève le blocage.
-    if (failure?.badCredentials) return null;
-    if (failure && Date.now() - failure.at < RETRY_AFTER_FAILURE_MS) return null;
+    if (loginBlocked(userId)) return null;
 
     // Plusieurs commandes simultanées ne déclenchent qu'une seule connexion.
     let pending = restoring.get(userId);
@@ -330,15 +341,22 @@ async function refreshToken(userId: string): Promise<GesAuthenticationToken | nu
         sessions.delete(userId);
         return null;
     }
+    // Un cycle garde le même jeton pour toutes ses lectures : sans ce contrôle, chacune
+    // retenterait une connexion, et un mot de passe périmé serait essayé en rafale.
+    if (loginBlocked(userId)) return null;
     try {
         const fresh = await GesAPI.login(decrypt(creds.user), decrypt(creds.pass));
+        failures.delete(userId);
         log('AUTH', `Token rafraîchi pour ${userId}.`);
         return fresh;
     } catch (e) {
-        if (e instanceof BadCredentialsError) {
+        // /login ou /logout entre-temps : cet échec ne concerne plus le compte actuel.
+        if (loadData().users[userId] !== creds) return null;
+        const badCredentials = e instanceof BadCredentialsError;
+        failures.set(userId, { at: Date.now(), badCredentials });
+        if (badCredentials) {
             // Mot de passe changé côté MyGes : la session n'est plus récupérable.
             sessions.delete(userId);
-            failures.set(userId, { at: Date.now(), badCredentials: true });
             logError('AUTH', `Rafraîchissement pour ${userId} : identifiants refusés par MyGes (refaire /login).`);
         } else {
             logError('AUTH', `Échec du rafraîchissement de token pour ${userId} :`, e);

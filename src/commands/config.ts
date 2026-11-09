@@ -4,9 +4,8 @@ import {
     PermissionFlagsBits, PermissionsBitField, SlashCommandBuilder,
 } from 'discord.js';
 import { Command } from '../core/command';
-import { getGuildConfig, getSession, hasAccount, loadData, saveData } from '../core/store';
-import { ProjectService } from '../myges/services/project';
-import { getCurrentYear, isBotOwner } from '../config';
+import { getGuildConfig, hasAccount, loadData, saveData } from '../core/store';
+import { isBotOwner } from '../config';
 import { limitLifetime } from '../utils/collector';
 import { log, logError } from '../utils/logger';
 
@@ -191,23 +190,12 @@ const command: Command = {
                         await i.followUp({ content: '❌ Connecte-toi d\'abord avec `/login`.', flags: MessageFlags.Ephemeral });
                         return;
                     }
+                    // Ses projets existants ne sont pas des nouveautés : le prochain cycle les
+                    // marquera comme vus. Lire ici ferait annoncer tout l'historique si MyGes
+                    // était indisponible à cet instant précis.
+                    if (cfg.referenceUserId !== i.user.id) cfg.projectsSeeded = false;
                     cfg.referenceUserId = i.user.id;
                     log('CONFIG', `${guild.name} : compte de référence = ${i.user.id} (son propre compte)`);
-
-                    // Premier paramétrage : on marque les projets DÉJÀ existants comme vus,
-                    // sinon le prochain cycle annoncerait tout l'historique d'un coup.
-                    if (cfg.knownProjectIds.length === 0) {
-                        const token = await getSession(i.user.id);
-                        if (token) {
-                            try {
-                                const projects = (await ProjectService.getProjects(token, getCurrentYear())) || [];
-                                cfg.knownProjectIds = projects.map((p: any) => p.project_id).filter((id: any) => id != null);
-                                log('CONFIG', `${guild.name} : ${cfg.knownProjectIds.length} projet(s) existant(s) marqué(s) comme déjà vus`);
-                            } catch (e) {
-                                logError('CONFIG', `${guild.name} : amorçage des projets impossible :`, e);
-                            }
-                        }
-                    }
                 } else if (i.isButton() && i.customId === 'cfg_reset') {
                     // On repart d'une config vierge pour ce serveur uniquement.
                     data.guilds[guildId] = { knownProjectIds: [] };

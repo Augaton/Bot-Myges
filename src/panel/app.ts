@@ -1,12 +1,14 @@
 // Serveur du panel étudiant. Volontairement sans framework ni dépendance : quelques
 // routes fixes, des en-têtes stricts, et aucune donnée MyGes stockée sur disque.
+import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as http from 'node:http';
 import * as https from 'node:https';
 import * as net from 'node:net';
 import * as path from 'node:path';
+import * as zlib from 'node:zlib';
 import {
-    forgetAssignments, getAbsences, getAssignments, getClasses, getClassmatePhotos, getClassmates, getCourses, getEvents, getGrades, getNews, getProfile, getStudentPhoto, getSyllabus, getTeacherPhotos, getTeachers, getTimetable,
+    forgetAssignments, getAbsences, getAnnualDocuments, getAssignments, getClasses, getClassmatePhotos, getClassmates, getCourseFiles, getCourses, getEvents, getGrades, getNews, getProfile, getStudentPhoto, getSyllabus, getTeacherPhotos, getTeachers, getTimetable,
 } from '../core/mygesData';
 import { BadCredentialsError, FileTooLargeError, MyGesError } from '../myges/errors';
 import { GesAPI } from '../myges/ges-api';
@@ -68,7 +70,18 @@ const isOutage = (e: unknown) => !(e instanceof MyGesError) || e.status >= 500 |
 
 function loadStaticFiles() {
     const dir = path.resolve(__dirname, '..', '..', 'assets', 'panel');
-    const file = (name: string, type: string) => ({ body: fs.readFileSync(path.join(dir, name)), type });
+    const file = (name: string, type: string) => {
+        const body = fs.readFileSync(path.join(dir, name));
+        return {
+            body,
+            type,
+            // Faible : le même fichier existe compressé ou non.
+            etag: `W/"${crypto.createHash('sha256').update(body).digest('base64url').slice(0, 22)}"`,
+            // Fichiers publics et fixes, sans donnée personnelle : aucun risque à les compresser.
+            // Les réponses de l'API, elles, ne le sont pas. Les PNG le sont déjà.
+            gzipped: type.startsWith('image/') ? null : zlib.gzipSync(body),
+        };
+    };
     // Liste fermée : aucun chemin demandé ne touche au disque.
     return new Map([
         ['/', file('index.html', 'text/html; charset=utf-8')],
@@ -431,8 +444,8 @@ export function createPanel({ trustProxy, tls, sessionsFile }: { trustProxy: boo
 
     async function documentFiles(session: Session, source: string) {
         const payload = await read(session, (t) => (source === ANNUAL
-            ? DocumentService.getAnnualDocuments(t, getCurrentYear())
-            : DocumentService.getCourseFiles(t, source)));
+            ? getAnnualDocuments(session.key, t)
+            : getCourseFiles(session.key, t, source)));
         return toDocuments(payload);
     }
 
@@ -488,8 +501,16 @@ export function createPanel({ trustProxy, tls, sessionsFile }: { trustProxy: boo
         const file = statics.get(url.pathname);
 
         if ((req.method === 'GET' || req.method === 'HEAD') && file) {
-            res.writeHead(200, { ...HEADERS, 'Content-Type': file.type, 'Cache-Control': 'no-cache' });
-            res.end(file.body);
+            const caching = { ...HEADERS, 'Cache-Control': 'no-cache', ETag: file.etag, Vary: 'Accept-Encoding' };
+            if (req.headers['if-none-match'] === file.etag) {
+                res.writeHead(304, caching);
+                res.end();
+                return;
+            }
+            const compressed = /\bgzip\b(?!;q=0\b)/i.test(req.headers['accept-encoding'] ?? '') ? file.gzipped : null;
+            const body = compressed ?? file.body;
+            res.writeHead(200, { ...caching, 'Content-Type': file.type, 'Content-Length': body.length, ...(compressed ? { 'Content-Encoding': 'gzip' } : {}) });
+            res.end(body);
             return;
         }
         if (req.method === 'POST' && url.pathname === '/api/login') return login(req, res);

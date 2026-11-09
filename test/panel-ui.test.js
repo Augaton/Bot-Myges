@@ -29,7 +29,8 @@ class El {
     prepend(...items) { this.kids.unshift(...this.adopt(items)); }
     replaceChildren(...items) { this.kids = this.adopt(items); }
     remove() { this.parent?.kids.splice(this.parent.kids.indexOf(this), 1); }
-    focus() {}
+    focus() { this.focused = true; }
+    scrollIntoView() { this.scrolled = true; }
     showModal() {}
     close() { return this.fire('close'); }
     click() { return this.fire('click'); }
@@ -96,9 +97,10 @@ function browser() {
     const root = new El('div');
     const windowListeners = {};
     const location = { hash: '', pathname: '/' };
+    const fakeWindow = { addEventListener: (type, fn) => { windowListeners[type] = fn; }, scrollTo(x, y) { this.lastScroll = y; }, scrollY: 0 };
     const context = vm.createContext({
         document: { getElementById: () => root, createElement: (tag) => new El(tag), title: '' },
-        window: { addEventListener: (type, fn) => { windowListeners[type] = fn; }, scrollTo() {}, scrollY: 0 },
+        window: fakeWindow,
         location,
         history: { replaceState() { location.hash = ''; } },
         fetch: send,
@@ -114,6 +116,8 @@ function browser() {
     };
     return {
         root,
+        context,
+        window: fakeWindow,
         blobs,
         requests,
         windowListeners,
@@ -828,4 +832,178 @@ test('accueil sans cours ni données : états vides lisibles', async (t) => {
     await page.signIn('vide', 'bon');
     assert.match(page.text(), /Aucun cours dans les 6 prochaines semaines/);
     assert.match(page.text(), /Rien à rendre/);
+});
+
+test('échéances : en jours de calendrier, heure de Paris, changement d\'heure compris', () => {
+    const page = browser();
+    const at = (iso) => new Date(iso).getTime();
+    const from = (iso) => vm.runInContext(`Date.now = () => ${at(iso)}`, page.context);
+    const relative = (iso) => vm.runInContext(`relative(${at(iso)})`, page.context);
+
+    from('2026-11-09T09:00:00Z'); // 10 h à Paris
+    assert.strictEqual(relative('2026-11-09T13:00:00Z'), 'aujourd\'hui'); // 14 h, le même jour
+    assert.strictEqual(relative('2026-11-09T22:59:00Z'), 'aujourd\'hui'); // 23 h 59
+    assert.strictEqual(relative('2026-11-09T23:00:00Z'), 'demain'); // minuit
+    assert.strictEqual(relative('2026-11-10T19:00:00Z'), 'demain'); // 33 h plus tard, toujours demain
+    assert.strictEqual(relative('2026-11-11T08:00:00Z'), 'dans 2 jours');
+
+    from('2027-03-27T22:00:00Z'); // 23 h à Paris, la veille du passage à l'heure d'été
+    assert.strictEqual(relative('2027-03-28T21:59:00Z'), 'demain');
+    assert.strictEqual(relative('2027-03-28T22:00:00Z'), 'dans 2 jours');
+});
+
+test('accueil : cours en cours avec son heure de fin, et prochain examen mis en avant', async (t) => {
+    t.mock.method(console, 'log', () => {});
+    const started = Date.now() - H;
+    const running = { ...course(1, 0, 'T1 - Réseaux'), start_date: started, end_date: started + 2 * H };
+    const exam = { ...course(2, 240, 'T1 - Anglais'), type: 'Examen' };
+    mygesMock([['/agenda', () => json(200, { result: [running, exam] })]]);
+    const page = browser();
+    await page.settle();
+    await page.signIn('examen', 'bon');
+    assert.match(page.text(), /Cours en cours/);
+    assert.match(page.text(), /Jusqu'à \d{2}:\d{2}/);
+    assert.match(page.text(), /Prochain examen : .*dans \d+ jours/);
+});
+
+test('déconnexion ratée : la session reste affichée, avec un message, et un nouvel essai aboutit', async (t) => {
+    t.mock.method(console, 'log', () => {});
+    mygesMock();
+    const page = browser();
+    await page.settle();
+    await page.signIn('sortie', 'bon');
+
+    page.failNext(502, '<html>');
+    await page.button('Déconnexion').click();
+    await page.settle();
+    assert.match(page.alerts().join(), /session reste ouverte/);
+    assert.ok(page.button('Déconnexion'), 'toujours dans le panel');
+    assert.ok(page.lastCookie().includes('__Host-panel=') && !/Max-Age=0/.test(page.lastCookie()), 'cookie intact');
+
+    await page.button('Déconnexion').click();
+    await page.settle();
+    assert.match(page.lastCookie(), /Max-Age=0/);
+    assert.ok(page.byId('password'), 'écran de connexion');
+});
+
+test('réponse encore en route à la déconnexion : elle ne ressort pas au compte suivant', async (t) => {
+    t.mock.method(console, 'log', () => {});
+    t.mock.method(console, 'error', () => {});
+    let release;
+    let slow = true;
+    const grades = (course) => json(200, { result: [{ course, trimester_name: 'Semestre 1', average: 12, grades: [12] }] });
+    mygesMock([['/grades', () => (slow ? new Promise((resolve) => { release = () => resolve(grades('Matière de A')); }) : grades('Matière de B'))]]);
+    const page = browser();
+    await page.settle();
+    await page.signIn('compte.a', 'bon');
+    await page.go('notes');
+
+    await page.button('Déconnexion').click();
+    await page.settle();
+    release();
+    await page.settle();
+
+    slow = false;
+    await page.signIn('compte.b', 'bon');
+    await page.go('notes');
+    assert.match(page.text(), /Matière de B/);
+    assert.doesNotMatch(page.text(), /Matière de A/);
+});
+
+test('défilement : chaque projet garde le sien, un autre projet s\'ouvre en haut', async (t) => {
+    t.mock.method(console, 'log', () => {});
+    const project = (id) => ({ project_id: id, name: `Projet ${id}`, steps: [{ psp_id: id, psp_limit_date: now + 30 * H, psp_type: 'Rendu' }] });
+    mygesMock([['/projects', () => json(200, { result: [project(1), project(2)] })]]);
+    const page = browser();
+    await page.settle();
+    await page.signIn('defile', 'bon');
+
+    await page.go('projet/1');
+    page.window.scrollY = 500;
+    await page.go('projets');
+    page.window.scrollY = 0;
+    await page.go('projet/2');
+    assert.strictEqual(page.window.lastScroll, 0);
+    await page.go('projet/1');
+    assert.strictEqual(page.window.lastScroll, 500);
+});
+
+test('équipes : le filtre gardé d\'un autre projet ne vide pas la liste d\'un projet complet', async (t) => {
+    t.mock.method(console, 'log', () => {});
+    const project = (id, students) => ({ project_id: id, name: `Projet ${id}`, project_type_group: 'Libre', project_max_student_group: 2, steps: [], groups: [{ project_group_id: id * 10, group_name: `Groupe ${id}`, project_group_students: students }] });
+    mygesMock([['/projects', () => json(200, { result: [project(1, [{ u_id: 1 }]), project(2, [{ u_id: 1 }, { u_id: 2 }])] })]]);
+    const page = browser();
+    await page.settle();
+    await page.signIn('filtre', 'bon');
+
+    await page.go('projet/1/equipes');
+    await page.button('Avec de la place').click();
+    await page.go('projet/2/equipes');
+    assert.match(page.text(), /Groupe 2/);
+    assert.doesNotMatch(page.text(), /Aucune équipe ne correspond/);
+});
+
+test('actualités : un texte n\'est coupé que si « Lire la suite » existe', async (t) => {
+    t.mock.method(console, 'log', () => {});
+    const items = [{ ne_id: 1, title: 'Courte', summary: 'x'.repeat(200), date: now }, { ne_id: 2, title: 'Longue', summary: 'y'.repeat(300), date: now }];
+    mygesMock([['/news', () => json(200, { result: { content: items } })]]);
+    const page = browser();
+    await page.settle();
+    await page.signIn('news', 'bon');
+    await page.go('actualites');
+    const clamped = page.root.all((e) => e.className.includes('clamp')).map((e) => e.textContent[0]);
+    assert.deepStrictEqual(clamped, ['y']);
+    assert.strictEqual(page.root.all((e) => e.tag === 'button' && e.textContent === 'Lire la suite').length, 1);
+});
+
+test('documents : le focus suit l\'ouverture d\'un dossier et le retour, l\'erreur d\'un téléchargement est amenée à l\'écran', async (t) => {
+    t.mock.method(console, 'log', () => {});
+    t.mock.method(console, 'error', () => {});
+    mygesMock();
+    const page = browser();
+    await page.settle();
+    await page.signIn('focus', 'bon');
+    await page.go('documents');
+
+    const folder = page.root.all((e) => e.tag === 'button' && e.textContent.includes('Réseaux'))[0];
+    await folder.click();
+    assert.ok(page.root.all((e) => e.tag === 'h2' && e.focused && e.textContent.includes('Réseaux')).length, 'titre du dossier');
+
+    page.failNext(502, '<html>');
+    await page.button('Cours 1').click();
+    await page.settle();
+    assert.ok(page.root.all((e) => e.attrs.role === 'alert' && e.scrolled).length, 'erreur visible');
+
+    await page.button('Tous les dossiers').click();
+    assert.ok(folder.focused);
+});
+
+test('agenda sur téléphone : aujourd\'hui est titré et montré, une seule fois', async (t) => {
+    t.mock.method(console, 'log', () => {});
+    const start = Date.now();
+    mygesMock([['/agenda', () => json(200, { result: [{ ...course(1, 0, 'T1 - Réseaux'), start_date: start, end_date: start + H }] })]]);
+    const page = browser();
+    await page.settle();
+    await page.signIn('jour', 'bon');
+    await page.go('agenda');
+    const today = page.root.all((e) => e.tag === 'section' && e.scrolled);
+    assert.strictEqual(today.length, 1);
+    assert.match(today[0].textContent, /Aujourd'hui/);
+
+    await page.go('notes');
+    await page.go('agenda');
+    assert.strictEqual(page.root.all((e) => e.tag === 'section' && e.scrolled).length, 0, 'au retour, on retrouve sa position');
+});
+
+test('menu Plus : se referme au contact du contenu', async (t) => {
+    t.mock.method(console, 'log', () => {});
+    mygesMock();
+    const page = browser();
+    await page.settle();
+    await page.signIn('menu', 'bon');
+    const plus = page.button('Plus');
+    await plus.click();
+    assert.strictEqual(plus.getAttribute('aria-expanded'), 'true');
+    await page.byId('contenu').click();
+    assert.strictEqual(plus.getAttribute('aria-expanded'), 'false');
 });

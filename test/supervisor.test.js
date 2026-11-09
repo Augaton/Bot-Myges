@@ -89,3 +89,39 @@ test('bot mal configuré : tout s\'arrête avec le même code', async () => {
     assert.strictEqual(await exited, 78);
     assert.ok(await until(() => read(dir, 'panel.txt').includes('stop') || !read(dir, 'panel.txt').includes('start')));
 });
+
+// Échec de lancement simulé dans le superviseur seul : préchargé par NODE_OPTIONS.
+function failFirstSpawn(dir, failure) {
+    const file = path.join(dir, 'echec-spawn.js');
+    fs.writeFileSync(file, `
+const cp = require('node:child_process');
+const { EventEmitter } = require('node:events');
+const real = cp.spawn;
+let first = true;
+cp.spawn = (...args) => {
+    if (!first) return real(...args);
+    first = false;
+    ${failure}
+};`);
+    return { NODE_OPTIONS: `--require ${file}` };
+}
+
+test('lancement impossible (exception) : le superviseur survit et relance', async () => {
+    const dir = sandbox();
+    const env = failFirstSpawn(dir, "throw Object.assign(new Error('spawn ENOMEM'), { code: 'ENOMEM' });");
+    const { child, exited } = run(dir, env);
+    assert.ok(await until(() => read(dir, 'bot.txt').includes('start')));
+    child.kill('SIGTERM');
+    assert.strictEqual(await exited, 0);
+});
+
+test('lancement impossible (événement, sans flux) : le superviseur survit et relance', async () => {
+    const dir = sandbox();
+    const env = failFirstSpawn(dir, `const fake = new EventEmitter();
+    process.nextTick(() => { fake.emit('error', Object.assign(new Error('spawn EMFILE'), { code: 'EMFILE' })); fake.emit('close', -24, null); });
+    return fake;`);
+    const { child, exited } = run(dir, env);
+    assert.ok(await until(() => read(dir, 'bot.txt').includes('start')));
+    child.kill('SIGTERM');
+    assert.strictEqual(await exited, 0);
+});

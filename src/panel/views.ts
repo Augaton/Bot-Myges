@@ -1,6 +1,6 @@
 // Réponses de l'API du panel : seulement ce que l'écran affiche, jamais la réponse
 // brute de MyGes. Tout est du texte : le navigateur l'insère sans l'interpréter.
-import { courseName, coursePlace, formatCampus, fullName, getNextStep, snippet } from '../utils/format';
+import { courseName, coursePlace, formatCampus, fullName, getNextStep, paragraphs, snippet } from '../utils/format';
 import { generalAverage, toSubject } from '../utils/grades';
 
 // Très au-delà de ce qu'un étudiant peut avoir : une réponse démesurée n'occupe pas
@@ -87,7 +87,7 @@ function projectSteps(project: any, group: any) {
         .map((step) => ({
             id: String(step?.psp_id ?? ''),
             type: String(step?.psp_type || 'Étape'),
-            desc: snippet(step?.psp_desc, 1_000),
+            desc: paragraphs(step?.psp_desc, 1_000),
             date: Number(step?.psp_limit_date),
             files: group
                 ? list(step?.files)
@@ -183,10 +183,10 @@ export function projectDetail(raw: any, id: string, uid: number | null) {
         course: String(p?.course_name ?? ''),
         practical: !!p?.practical,
         teacher: String(p?.author ?? ''),
-        goal: snippet(p?.project_teaching_goals, 2_000),
-        plan: snippet(p?.project_detail_plan, 4_000),
+        goal: paragraphs(p?.project_teaching_goals, 2_000),
+        plan: paragraphs(p?.project_detail_plan, 4_000),
         tools: snippet(p?.project_computing_tools, 500),
-        books: snippet(p?.project_ref_books, 1_000),
+        books: paragraphs(p?.project_ref_books, 1_000),
         subjectType: String(p?.project_type_subject ?? ''),
         groupType: String(p?.project_type_group ?? ''),
         groupSize: { min: Number(p?.project_min_student_group) || null, max: Number(p?.project_max_student_group) || null },
@@ -205,7 +205,7 @@ export function projectDetail(raw: any, id: string, uid: number | null) {
             name: String(group?.group_name ?? ''),
             subjectValidated: !!group?.subject_validated,
             presentation: Number(group?.date_presentation) || null,
-            teacherComment: snippet(group?.teacher_comment, 2_000),
+            teacherComment: paragraphs(group?.teacher_comment, 2_000),
             members: list(group?.project_group_students).map(personView),
         },
         activity: list(p?.project_group_logs)
@@ -242,7 +242,7 @@ function eventView(e: any) {
         type: String(e?.event_type ?? ''),
         location: snippet(String(e?.location ?? ''), 160),
         organizer: snippet(String(e?.organizer ?? ''), 160),
-        description: snippet(String(e?.description ?? ''), 2_000),
+        description: paragraphs(String(e?.description ?? ''), 2_000),
         subscribed: e?.is_participant_subscribed === true,
         subscribeUntil: Number(e?.end_subscription_date) || null,
     };
@@ -280,7 +280,7 @@ export function monthDays(raw: any) {
 export function syllabusView(raw: any) {
     const s = Array.isArray(raw) ? raw[0] : raw;
     if (!s || typeof s !== 'object') return null;
-    const text = (value: unknown, max = 1_000) => snippet(typeof value === 'string' ? value : '', max);
+    const text = (value: unknown, max = 1_000) => paragraphs(typeof value === 'string' ? value : '', max);
     return {
         ects: Number(s.ects) || null,
         coef: Number(s.coef) || null,
@@ -297,7 +297,7 @@ export function newsView(raw: any) {
         const date = new Date(n?.date).getTime();
         return {
             title: snippet(n?.title || n?.subject || 'Sans titre', 160),
-            body: snippet(n?.summary || n?.html || n?.content || n?.message || n?.body || n?.description || '', 4_000),
+            body: paragraphs(n?.summary || n?.html || n?.content || n?.message || n?.body || n?.description || '', 4_000),
             date: Number.isFinite(date) ? date : null,
         };
     });

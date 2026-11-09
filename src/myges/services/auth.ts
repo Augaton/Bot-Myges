@@ -45,8 +45,13 @@ export class AuthService {
       }),
     );
 
-    // Redirection sans token (page d'erreur, de login…) : accès refusé.
-    if (!properties.access_token) throw new BadCredentialsError();
+    if (!properties.access_token) {
+      // Un refus explicite (RFC 6749, §4.2.2.1) vise le compte. Toute autre redirection
+      // (page de maintenance, par exemple) n'en dit rien : la prendre pour un mauvais mot
+      // de passe bloquerait la session jusqu'au prochain /login.
+      if (/[?#&]error=/.test(location)) throw new BadCredentialsError();
+      throw new MyGesError(response.status, 'Authentification MyGes indisponible (redirection sans token)');
+    }
 
     return {
       access_token: properties.access_token,

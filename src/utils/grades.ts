@@ -35,14 +35,17 @@ export function toSubject(raw: any): Subject {
         : [];
 
     const cc = num(raw?.ccaverage);
+    const average = num(raw?.average);
+    const exam = num(raw?.exam);
     return {
         name,
         teacher,
-        average: num(raw?.average),
+        // MyGes met 0 tant qu'une matière n'est pas notée : ce n'est pas un 0/20.
+        average: average === 0 && !notes.length && !exam ? null : average,
         // Une moyenne CC à 0 signifie « pas encore de note » côté MyGes.
         ccAverage: cc && cc > 0 ? cc : null,
         notes,
-        exam: num(raw?.exam),
+        exam,
         absences: num(raw?.absences) ?? 0,
         ects: num(raw?.ects),
         coef: num(raw?.coef),

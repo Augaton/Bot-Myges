@@ -45,3 +45,25 @@ test('snippet : les accents HTML sont décodés, pas remplacés par des espaces'
 test('snippet : une balise encodée reste du texte', () => {
     assert.strictEqual(snippet('&lt;b&gt;gras&lt;/b&gt;'), '<b>gras</b>');
 });
+
+test('paragraphs : garde les paragraphes, ôte le HTML, ne laisse ni espaces ni lignes en trop', () => {
+    const { paragraphs } = dist('utils/format.js');
+    assert.strictEqual(paragraphs('<p>Un  <b>texte</b></p><p>Deux</p>'), 'Un texte \nDeux'.replace(' \n', '\n'));
+    assert.strictEqual(paragraphs('a<br>b<br/><br /><br>c'), 'a\nb\n\nc');
+    assert.strictEqual(paragraphs('a\r\n  b\n\n\n\nc'), 'a\nb\n\nc');
+    assert.strictEqual(paragraphs('&lt;b&gt; reste du texte'), '<b> reste du texte');
+    assert.strictEqual(paragraphs('x'.repeat(50), 10).length, 10);
+    assert.strictEqual(paragraphs(''), '');
+    assert.strictEqual(paragraphs(undefined), '');
+    assert.strictEqual(paragraphs(12), '12');
+    const started = Date.now();
+    paragraphs('<'.repeat(200_000));
+    paragraphs(`\n${' '.repeat(200_000)}\n`);
+    assert.ok(Date.now() - started < 2_000);
+});
+
+test('snippet : garde une seule ligne, et un champ qui n\'est pas du texte ne plante plus', () => {
+    assert.strictEqual(snippet('<p>Un</p><p>Deux</p><br>Trois'), 'Un Deux Trois');
+    assert.strictEqual(snippet(12), '12');
+    assert.strictEqual(snippet({}), '[object Object]');
+});

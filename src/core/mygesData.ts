@@ -5,6 +5,7 @@
 // concerne un utilisateur (déconnexion, changement de compte).
 import { TtlCache } from '../utils/ttlCache';
 import { TimetableService } from '../myges/services/timetable';
+import { DocumentService } from '../myges/services/document';
 import { ProfileService } from '../myges/services/profile';
 import { ProjectService } from '../myges/services/project';
 import { SchoolService } from '../myges/services/school';
@@ -18,9 +19,11 @@ const TTL_MS = {
     grades: 2 * 60_000,
     profile: 10 * 60_000,
     projects: 60_000,
+    documents: 5 * 60_000,
 };
 
-const cache = new TtlCache<unknown>(TTL_MS.timetable, 500);
+// Plus d'entrées qu'il n'y paraît : l'écran Documents du panel lit toutes les matières.
+const cache = new TtlCache<unknown>(TTL_MS.timetable, 2_000);
 const inflight = new Map<string, Promise<unknown>>();
 
 function cached<T>(userId: string, key: string, ttlMs: number, fetch: () => Promise<T>): Promise<T> {
@@ -45,6 +48,14 @@ function cached<T>(userId: string, key: string, ttlMs: number, fetch: () => Prom
         });
     inflight.set(fullKey, pending);
     return pending;
+}
+
+export function getCourseFiles(userId: string, token: GesAuthenticationToken, rcId: string) {
+    return cached(userId, `files|${rcId}`, TTL_MS.documents, () => DocumentService.getCourseFiles(token, rcId));
+}
+
+export function getAnnualDocuments(userId: string, token: GesAuthenticationToken) {
+    return cached(userId, `annual|${getCurrentYear()}`, TTL_MS.documents, () => DocumentService.getAnnualDocuments(token, getCurrentYear()));
 }
 
 /** Efface toutes les données en cache d'un utilisateur. */
@@ -178,14 +189,17 @@ export function getNews(userId: string, token: GesAuthenticationToken): Promise<
     return cached(userId, 'news', TTL_MS.profile, async () => (await SchoolService.getNews(token)) ?? []);
 }
 
+/** Un brouillon n'existe pas encore pour les étudiants : ni annonce, ni rappel, ni affichage. */
+const published = (items: any[] | null | undefined) => (items ?? []).filter((p) => !p?.is_draft);
+
 export function getProjects(userId: string, token: GesAuthenticationToken): Promise<any[]> {
     const year = getCurrentYear();
-    return cached(userId, `projects|${year}`, TTL_MS.projects, async () => (await ProjectService.getProjects(token, year)) || []);
+    return cached(userId, `projects|${year}`, TTL_MS.projects, async () => published(await ProjectService.getProjects(token, year)));
 }
 
 function getPracticals(userId: string, token: GesAuthenticationToken): Promise<any[]> {
     const year = getCurrentYear();
-    return cached(userId, `practicals|${year}`, TTL_MS.projects, async () => (await ProjectService.getPracticals(token, year)) || []);
+    return cached(userId, `practicals|${year}`, TTL_MS.projects, async () => published(await ProjectService.getPracticals(token, year)));
 }
 
 /**

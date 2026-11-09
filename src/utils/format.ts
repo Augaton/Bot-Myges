@@ -20,20 +20,34 @@ function decodeEntity(_entity: string, name: string): string {
 // à rien et coûterait du temps sur le thread principal.
 const MAX_SNIPPET_INPUT = 20_000;
 
-// Transforme un texte (potentiellement du HTML) en une ligne courte lisible.
-export function snippet(raw: string, max = 120): string {
-    if (!raw) return '';
-    const clean = raw
+function toText(raw: unknown, lineBreak: string): string {
+    return String(raw)
         .slice(0, MAX_SNIPPET_INPUT)
-        .replace(/<br\s*\/?>/gi, ' ')
+        .replace(/<br\s*\/?>|<\/(?:p|div|li|tr|h[1-6])\s*>/gi, lineBreak)
         // [^<>] et non [^>] : sur une suite de « < », ce dernier devient quadratique
         // (66 s de gel pour 200 000 caractères, mesurés).
         .replace(/<[^<>]+>/g, ' ')
         // Après le retrait des balises : un « &lt;b&gt; » est du texte, pas du HTML.
-        .replace(/&(#\d+|#x[\da-f]+|[a-z]+);/gi, decodeEntity)
-        .replace(/\s+/g, ' ')
+        .replace(/&(#\d+|#x[\da-f]+|[a-z]+);/gi, decodeEntity);
+}
+
+const clip = (text: string, max: number) => (text.length > max ? text.slice(0, max - 1) + '…' : text);
+
+// Transforme un texte (potentiellement du HTML) en une ligne courte lisible.
+export function snippet(raw: unknown, max = 120): string {
+    if (!raw) return '';
+    return clip(toText(raw, ' ').replace(/\s+/g, ' ').trim(), max);
+}
+
+/** Comme snippet, mais garde les paragraphes : à afficher avec `white-space: pre-line`. */
+export function paragraphs(raw: unknown, max = 1_000): string {
+    if (!raw) return '';
+    const clean = toText(raw, '\n')
+        .replace(/[^\S\n]+/g, ' ')
+        .replace(/ ?\n ?/g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
         .trim();
-    return clean.length > max ? clean.slice(0, max - 1) + '…' : clean;
+    return clip(clean, max);
 }
 
 /**

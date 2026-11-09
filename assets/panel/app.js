@@ -63,12 +63,20 @@ const post = (path, body) => api(path, {
 // chaque retour à la connexion, pour que rien ne reste d'un compte à l'autre.
 const CACHE_MS = 60_000;
 const cache = new Map();
+let cacheEpoch = 0;
+
+/** Vide le cache. Une réponse encore en route à cet instant ne sera pas gardée. */
+function clearCache() {
+  cacheEpoch++;
+  cache.clear();
+}
 
 async function load(path) {
   const hit = cache.get(path);
   if (hit && Date.now() - hit.at < CACHE_MS) return hit.data;
+  const epoch = cacheEpoch;
   const data = await api(path);
-  cache.set(path, { at: Date.now(), data });
+  if (epoch === cacheEpoch) cache.set(path, { at: Date.now(), data });
   return data;
 }
 
@@ -84,7 +92,11 @@ async function downloadFile(path, fileName, button, zone, status = button) {
     h('a', { href: url, download: fileName }).click();
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
   } catch (e) {
-    if (e.status !== 401) zone.prepend(h('p', { class: 'field-error', role: 'alert' }, e.message));
+    if (e.status !== 401) {
+      const notice = h('p', { class: 'field-error', role: 'alert' }, e.message);
+      zone.prepend(notice);
+      notice.scrollIntoView({ block: 'nearest' });
+    }
   }
   button.disabled = false;
   status.textContent = label;
@@ -93,7 +105,7 @@ async function downloadFile(path, fileName, button, zone, status = button) {
 // --- Connexion ---
 
 function showLogin(message = '') {
-  cache.clear();
+  clearCache();
   const error = h('p', { class: 'field-error', role: 'alert', hidden: !message }, message);
   const username = h('input', { id: 'username', name: 'username', autocomplete: 'username', autocapitalize: 'none', spellcheck: 'false', required: true, maxlength: 100 });
   const password = h('input', { id: 'password', name: 'password', type: 'password', autocomplete: 'current-password', required: true, maxlength: 200 });
@@ -162,7 +174,11 @@ let renderId = 0;
 // Chrome et Edge proposent l'installation par cet évènement, à garder pour un clic de l'utilisateur.
 let installPrompt = null;
 let currentView = '';
+let currentPage = '';
+// Position de défilement de chaque page : deux projets n'ont pas la même.
 const scrolls = {};
+// Partie de l'écran à montrer à la première visite d'une page, choisie par sa vue.
+let scrollTarget = null;
 
 const setMenu = (open) => plus?.setAttribute('aria-expanded', String(open));
 
@@ -171,6 +187,7 @@ function showShell(name) {
   let touch = null;
   main = h('main', {
     id: 'contenu',
+    onclick: () => setMenu(false),
     ontouchstart: (e) => { touch = e.touches[0]; },
     ontouchend: (e) => {
       const end = e.changedTouches[0];
@@ -184,7 +201,15 @@ function showShell(name) {
   const logout = h('button', {
     type: 'button',
     onclick: async () => {
-      await post('/api/logout').catch(() => {});
+      let failure = null;
+      await post('/api/logout').catch((e) => { if (e.status !== 401) failure = e; });
+      if (failure) {
+        // Le cookie ne s'efface que côté serveur : surtout ne pas faire croire que c'est fait.
+        main.querySelector('[role="alert"]')?.remove();
+        main.prepend(h('p', { class: 'field-error', role: 'alert' }, `La déconnexion a échoué, ta session reste ouverte. ${failure.message}`));
+        window.scrollTo(0, 0);
+        return;
+      }
       history.replaceState(null, '', location.pathname);
       showLogin();
     },
@@ -229,8 +254,9 @@ async function render() {
   const id = VIEWS[route] ? route : 'accueil';
   const active = VIEWS[id].parent ?? id;
   const current = ++renderId;
-  if (currentView) scrolls[currentView] = window.scrollY;
+  if (currentView) scrolls[currentPage] = window.scrollY;
   currentView = id;
+  currentPage = location.hash;
   setMenu(false);
   for (const [key, link] of Object.entries(links)) {
     if (key === active) link.setAttribute('aria-current', 'page');
@@ -250,8 +276,11 @@ async function render() {
     if (current !== renderId) return; // l'étudiant a changé de page entre-temps
     clearTimeout(waiting);
     main.replaceChildren(title, ...[content].flat().filter(Boolean));
-    window.scrollTo(0, scrolls[id] ?? 0);
+    const saved = scrolls[currentPage];
+    window.scrollTo(0, saved ?? 0);
     title.focus({ preventScroll: true });
+    if (saved === undefined) scrollTarget?.scrollIntoView({ block: 'start' });
+    scrollTarget = null;
   } catch (e) {
     clearTimeout(waiting);
     if (current !== renderId || e.status === 401) return;
@@ -351,8 +380,11 @@ async function addCourseExtras(rcId, dialog, body) {
   body.append(...parts);
 }
 
+// En jours de calendrier, heure de Paris : un cours à 14 h vu à 10 h a lieu aujourd'hui.
+const calendarDay = (t) => Date.parse(isoFormat.format(t)) / DAY;
+
 function relative(date) {
-  const days = Math.ceil((date - Date.now()) / DAY);
+  const days = calendarDay(date) - calendarDay(Date.now());
   if (days <= 0) return 'aujourd\'hui';
   return days === 1 ? 'demain' : `dans ${days} jours`;
 }
@@ -450,15 +482,16 @@ async function homeView(title) {
   const todayKey = isoFormat.format(now);
   const courses = data.courses?.filter((c) => c.end > now) ?? null;
   const next = courses?.[0];
+  const exam = courses?.find((c) => c.type === 'Examen');
   const isToday = (t) => isoFormat.format(t) === todayKey;
 
   const hero = !courses
     ? unavailable()
     : next
       ? h('button', { type: 'button', class: 'next', onclick: () => showCourse(next) },
-        h('span', { class: 'small' }, next.start <= now ? 'Cours en cours' : `Prochain cours, ${relative(next.start)}`),
+        h('span', { class: 'small' }, next.start <= now ? 'Cours en cours' : isToday(next.start) ? 'Prochain cours' : `Prochain cours, ${relative(next.start)}`),
         h('span', { class: 'name' }, next.name),
-        h('span', {}, `${isToday(next.start) ? 'Aujourd\'hui' : day(next.start)} à ${time(next.start)}`),
+        h('span', {}, next.start <= now ? `Jusqu'à ${time(next.end)}` : `${isToday(next.start) ? 'Aujourd\'hui' : day(next.start)} à ${time(next.start)}`),
         next.place && h('span', { class: 'small' }, next.place))
       : h('p', { class: 'next' }, 'Aucun cours dans les 6 prochaines semaines.');
 
@@ -484,6 +517,7 @@ async function homeView(title) {
     stats.length > 0 && h('dl', { class: 'metrics stats' }, stats),
     h('div', { class: 'home' },
       h('div', { class: 'column' },
+        exam && section(`Prochain examen : ${day(exam.start)}, ${relative(exam.start)}`, h('ul', { class: 'rows' }, courseRow(exam, now))),
         days.size > 0 && section('Ensuite',
           [...days.values()].map((list) => h('div', { class: 'stack' },
             h('h3', { class: 'day-title' }, isToday(list[0].start) ? 'Aujourd\'hui' : day(list[0].start)),
@@ -504,7 +538,7 @@ const weekAt = (days) => isoFormat.format(agendaStart + days * DAY + DAY / 2);
 
 function goToWeek(week) {
   agendaWeek = week;
-  scrolls.agenda = 0;
+  delete scrolls[currentPage];
   render();
 }
 
@@ -521,7 +555,7 @@ function shiftMonth(month, delta) {
 
 function goToMonth(month) {
   agendaMonth = month;
-  scrolls.agenda = 0;
+  delete scrolls[currentPage];
   render();
 }
 
@@ -549,7 +583,7 @@ async function monthView() {
   const cell = (number) => {
     const key = `${month}-${String(number).padStart(2, '0')}`;
     const info = data.days[key];
-    const label = `${dayTitle.format(new Date(Date.UTC(year, index - 1, number)))}, ${info ? `${info.count} cours` : 'aucun cours'}`;
+    const label = `${dayTitle.format(new Date(Date.UTC(year, index - 1, number)))}, ${info ? `${info.count} cours${info.exam ? ', avec examen' : ''}` : 'aucun cours'}`;
     return h('td', {}, h('button', {
       type: 'button',
       class: `day${info ? ' has-courses' : ''}${key === today ? ' today' : ''}`,
@@ -599,7 +633,7 @@ async function agendaView() {
     agendaMode = id;
     // Le mois suit la semaine affichée : on ne perd pas sa place en changeant de vue.
     if (id === 'mois' && agendaStart) agendaMonth = isoFormat.format(agendaStart + DAY / 2).slice(0, 7);
-    scrolls.agenda = 0;
+    delete scrolls[currentPage];
     render();
   });
   const content = agendaMode === 'mois' ? await monthView() : await weekView();
@@ -620,7 +654,12 @@ async function weekView() {
       h('p', { class: 'muted' }, 'Aucun cours cette semaine.'),
       data.next && h('button', { type: 'button', onclick: () => goToWeek(isoFormat.format(data.next)) }, `Prochain cours : ${shortFormat.format(data.next)}`)),
     weekGrid(data, days),
-    days.size > 0 && h('div', { class: 'only-narrow stack' }, [...days.values()].map((courses) => section(day(courses[0].start), h('ul', { class: 'rows' }, courses.map((c) => courseRow(c)))))),
+    days.size > 0 && h('div', { class: 'only-narrow stack' }, [...days].map(([key, courses]) => {
+      const isToday = key === isoFormat.format(Date.now());
+      const block = section(isToday ? 'Aujourd\'hui' : day(courses[0].start), h('ul', { class: 'rows' }, courses.map((c) => courseRow(c))));
+      if (isToday) scrollTarget = block;
+      return block;
+    })),
   ];
   return [
     section(`Semaine du ${shortFormat.format(data.start + DAY / 2)} au ${shortFormat.format(data.start + 6 * DAY + DAY / 2)}`,
@@ -953,7 +992,7 @@ let teamFilter = 'toutes';
 function teamsPage(p) {
   const change = async (team, action) => {
     await post(`/api/projets/${p.id}/equipes/${team.id}/${action}`);
-    cache.clear(); // projets, accueil : tout ce qui citait l'ancienne équipe
+    clearCache(); // projets, accueil : tout ce qui citait l'ancienne équipe
     render();
   };
   const card = (team) => {
@@ -980,20 +1019,20 @@ function teamsPage(p) {
 
   const list = h('div', { class: 'stack' });
   let query = '';
+  const filterable = p.teams.some((team) => !team.full) && Boolean(p.groupSize.max);
   const show = () => {
     const needle = query.trim().toLocaleLowerCase('fr');
-    const found = p.teams.filter((team) => (teamFilter === 'toutes' || !team.full)
+    const found = p.teams.filter((team) => (teamFilter === 'toutes' || !filterable || !team.full)
       && `${team.name} ${team.members.map((m) => m.name).join(' ')}`.toLocaleLowerCase('fr').includes(needle));
     list.replaceChildren(found.length ? h('ul', { class: 'team-grid' }, found.map(card)) : empty('Aucune équipe ne correspond.'));
   };
   show();
-  const hasSpace = p.teams.some((team) => !team.full);
   return h('div', { class: 'stack' },
     p.canJoin && h('p', { class: 'muted small' }, 'Tu n\'as pas encore d\'équipe : choisis-en une qui a de la place.'),
     h('div', { class: 'team-tools' },
       p.teams.length > 5 && h('div', { class: 'narrow-field' }, h('label', { for: 'recherche-equipe' }, 'Chercher une équipe ou un étudiant'),
         h('input', { id: 'recherche-equipe', type: 'search', oninput: (e) => { query = e.target.value; show(); } })),
-      hasSpace && p.groupSize.max && filterChips('Filtrer les équipes', [['toutes', 'Toutes'], ['libres', 'Avec de la place']], teamFilter, (id) => { teamFilter = id; show(); })),
+      filterable && filterChips('Filtrer les équipes', [['toutes', 'Toutes'], ['libres', 'Avec de la place']], teamFilter, (id) => { teamFilter = id; show(); })),
     list);
 }
 
@@ -1154,7 +1193,7 @@ async function newsView() {
   return h('ul', { class: 'rows' }, items.map((n) => h('li', {}, h('article', { class: 'grow' },
     h('h2', {}, n.title),
     n.date && h('p', { class: 'muted small' }, dateFormat.format(n.date)),
-    n.body && h('p', { class: 'body-text clamp' }, n.body),
+    n.body && h('p', { class: `body-text${n.body.length > 220 ? ' clamp' : ''}` }, n.body),
     n.body.length > 220 && h('button', { type: 'button', class: 'link', onclick: () => showDialog(n.title, n.date && h('p', { class: 'muted small' }, dateFormat.format(n.date)), h('p', { class: 'body-text' }, n.body)) }, 'Lire la suite')))));
 }
 
@@ -1170,6 +1209,7 @@ async function documentsView() {
   const pane = h('div', { class: 'files stack' });
   const buttons = {};
   let category = '';
+  let paneTitle = null;
 
   const fileRow = (folder, file, showFolder) => {
     const action = h('span', { class: 'file-action small' }, 'Télécharger');
@@ -1208,8 +1248,16 @@ async function documentsView() {
     openFolder = folder.id;
     markOpen(folder.id);
     explorer.setAttribute('data-open', 'true');
-    const back = h('button', { type: 'button', class: 'only-narrow', onclick: showRecent }, 'Tous les dossiers');
-    const heading = h('h2', {}, folder.name);
+    const back = h('button', {
+      type: 'button',
+      class: 'only-narrow',
+      onclick: () => {
+        showRecent();
+        buttons[folder.id].focus();
+      },
+    }, 'Tous les dossiers');
+    const heading = h('h2', { tabindex: '-1' }, folder.name);
+    paneTitle = heading;
     if (!folder.files) return pane.replaceChildren(back, heading, h('p', { class: 'field-error', role: 'alert' }, 'Ce dossier est indisponible pour le moment.'));
 
     const categories = [...new Set(folder.files.map((file) => file.category).filter(Boolean))];
@@ -1244,7 +1292,13 @@ async function documentsView() {
       h('div', {}, h('label', { for: 'recherche' }, 'Rechercher un document'), search),
       h('ul', { class: 'folders rows' }, folders.map((folder) => {
         const count = folder.files ? plural(folder.files.length, 'fichier') : 'Indisponible';
-        buttons[folder.id] = h('button', { type: 'button', onclick: () => showFolder(folder) },
+        buttons[folder.id] = h('button', {
+          type: 'button',
+          onclick: () => {
+            showFolder(folder);
+            paneTitle.focus();
+          },
+        },
           h('span', { class: 'name' }, folder.name),
           h('span', { class: 'muted small' }, [folder.hint, count].filter(Boolean).join(', ')));
         return h('li', { class: 'flush' }, buttons[folder.id]);
