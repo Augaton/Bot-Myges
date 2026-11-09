@@ -11,6 +11,8 @@ export interface PanelSettings {
     tls?: { cert: string; key: string };
     /** Sessions « Rester connecté », chiffrées (voir sessions.ts). */
     sessionsFile: string;
+    /** Abonnements d'agenda préparés par le bot (voir utils/feedSeal.ts). */
+    feedsDir: string;
 }
 
 export function readSettings(envFile = path.resolve(__dirname, '..', '..', '.env')): PanelSettings {
@@ -30,5 +32,6 @@ export function readSettings(envFile = path.resolve(__dirname, '..', '..', '.env
         trustProxy: read('PANEL_TRUST_PROXY') === '1',
         tls: cert && key ? { cert, key } : undefined,
         sessionsFile: read('PANEL_SESSIONS_FILE') || path.resolve(path.dirname(envFile), 'panel_sessions.json'),
+        feedsDir: read('PANEL_FEEDS_DIR') || path.resolve(path.dirname(envFile), 'panel_feeds'),
     };
 }

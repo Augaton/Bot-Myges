@@ -234,6 +234,7 @@ cookie `Secure` n'est de toute façon pas accepté en HTTP simple.
 | `PANEL_PORT` | `3000` | Port d'écoute. |
 | `PANEL_TLS_CERT` | absent | Certificat (`fullchain.pem`). Relu toutes les 6 h, sans redémarrage. |
 | `PANEL_TLS_KEY` | absent | Clé privée (`privkey.pem`), en mode 600. |
+| `PANEL_FEEDS_DIR` | `panel_feeds` à la racine | Abonnements d'agenda chiffrés, écrits par le bot, servis par le panel. Les deux doivent voir le même dossier. |
 | `PANEL_SESSIONS_FILE` | `panel_sessions.json` à la racine | Sessions « Rester connecté », en mode 600. Le supprimer déconnecte tout le monde. |
 | `PANEL_TRUST_PROXY` | absent | `1` uniquement derrière un proxy, pour limiter les essais par visiteur. |
 
@@ -381,6 +382,19 @@ sans `EnvironmentFile` : les variables du panel sont lues dans le `.env`.
 MyGES l'est, chiffré avec une clé tirée du cookie de l'étudiant : le serveur ne garde que l'empreinte
 de ce cookie, donc `panel_sessions.json` seul ne donne ni jeton, ni nom, ni identifiant. Il survit aux
 redémarrages. Une déconnexion efface l'entrée. Quand le jeton expire, l'étudiant se reconnecte.
+
+`/abonnement` donne un lien d'abonnement d'agenda (`https://<adresse>/agenda/<secret>.ics`). Le bot
+garde le secret chiffré avec sa clé, comme les identifiants, et prépare toutes les 30 minutes les 12
+prochaines semaines, chiffrées avec ce secret, dans `PANEL_FEEDS_DIR`. Le panel sert ce fichier sans
+la clé du bot : le fichier seul ne donne rien. Le lien est un secret : nginx ne doit pas l'écrire dans
+ses journaux (`location /agenda/` avec `access_log off` et `error_log /dev/null crit`, voir
+`deploy/nginx/panel.conf` : panel arrêté, nginx écrirait sinon la requête entière dans `error.log`). « Nouveau
+lien » remplace l'ancien, « Supprimer » le coupe ; `/logout` et un changement de compte aussi.
+
+« Déconnecter mes autres appareils » (dans Mon profil) ferme les autres sessions du compte. Pour
+celles gardées sur disque et pas encore relues, le fichier garde une marque de révocation : une
+empreinte salée du compte et une date, jamais le compte en clair. La marque disparaît au bout de
+30 jours, quand toutes les sessions qu'elle visait ont expiré.
 
 Un réseau est un /24 en IPv4 et un /64 en IPv6. Ces compteurs vivent en mémoire : un
 redémarrage les remet à zéro. Au-delà de 300 échecs par 15 min, plus personne ne peut

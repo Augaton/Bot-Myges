@@ -3,7 +3,6 @@ import {
     SlashCommandBuilder, StringSelectMenuBuilder, StringSelectMenuInteraction,
 } from 'discord.js';
 import { Command } from '../core/command';
-import { getCurrentYear } from '../config';
 import { FileTooLargeError } from '../myges/errors';
 import { DocumentService } from '../myges/services/document';
 import { ProfileService } from '../myges/services/profile';
@@ -14,6 +13,8 @@ import {
 import { log, logError } from '../utils/logger';
 import { md } from '../utils/markdown';
 import { apiErrorMessage, sessionFor } from '../utils/replies';
+import { yearLabel } from '../utils/schoolYear';
+import { resolveYear, yearAutocomplete, yearOption } from '../utils/yearOption';
 
 // Discord limite un menu déroulant à 25 options.
 const MENU_MAX = 25;
@@ -25,16 +26,24 @@ const DEFAULT_ATTACHMENT_LIMIT = 10 * 1024 * 1024;
 const command: Command = {
     data: new SlashCommandBuilder()
         .setName('documents')
-        .setDescription('Télécharger tes supports de cours et les documents annuels'),
+        .setDescription('Télécharger tes supports de cours et les documents annuels')
+        .addStringOption(yearOption),
+
+    autocomplete: yearAutocomplete,
 
     execute: async (interaction: ChatInputCommandInteraction) => {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const token = await sessionFor(interaction);
         if (!token) return;
 
-        const year = getCurrentYear();
+        let year: string;
+        let pastYear = '';
         let courses: DocumentSource[];
         try {
+            const resolved = await resolveYear(interaction, token);
+            if (!resolved) return interaction.editReply('Année indisponible pour ton compte.');
+            year = resolved.year;
+            if (year !== resolved.current) pastYear = `**${yearLabel(year)}** · `;
             courses = courseSources(await ProfileService.getCourses(token, year));
         } catch (e) {
             logError('DOCUMENTS', 'Récupération des matières impossible :', e);
@@ -52,7 +61,7 @@ const command: Command = {
 
         const describe = () => {
             if (notice) return notice;
-            if (!selected) return 'Choisis une matière, ou les documents annuels. Le fichier t\'est envoyé ici, visible par toi seul.';
+            if (!selected) return `${pastYear}Choisis une matière, ou les documents annuels. Le fichier t'est envoyé ici, visible par toi seul.`;
             if (!files.length) return `Aucun document pour **${md(selected.name)}**.`;
             const count = files.length > MENU_MAX ? `les ${MENU_MAX} plus récents sur ${files.length}` : `${files.length} document${files.length > 1 ? 's' : ''}`;
             return `**${md(selected.name)}** · ${count}. Choisis un fichier pour le recevoir.`;

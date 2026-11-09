@@ -1,7 +1,7 @@
 import { Client, EmbedBuilder } from 'discord.js';
-import { getProjects } from '../core/mygesData';
+import { getCurrentYearFor, getProjects } from '../core/mygesData';
 import { getGuildConfig, getSession, hasAccount, loadData, saveData } from '../core/store';
-import { getNextStep, snippet } from '../utils/format';
+import { discordDeadline, getNextStep, snippet } from '../utils/format';
 import { log, logError } from '../utils/logger';
 import { md } from '../utils/markdown';
 
@@ -71,7 +71,7 @@ export async function checkNewProjects(client: Client) {
         }
         let projects: any[];
         try {
-            projects = await getProjects(userId, token);
+            projects = await getProjects(userId, token, await getCurrentYearFor(userId, token));
         } catch (e) {
             logError('PROJET', `Compte ${userId} : récupération des projets impossible :`, e);
             continue;
@@ -101,7 +101,8 @@ export async function checkNewProjects(client: Client) {
                 if (p.project_id == null || cfg.knownProjectIds.includes(p.project_id)) continue;
 
                 const nextStep = getNextStep(p);
-                const dateStr = nextStep ? new Date(nextStep.date).toLocaleDateString('fr-FR') : 'Non définie';
+                // Horodatage Discord : affiché dans le fuseau de chacun, pas celui du serveur.
+                const dateStr = nextStep ? discordDeadline(nextStep.date) : 'Non définie';
                 const typeStep = nextStep ? nextStep.type : 'Lancement';
 
                 const embed = new EmbedBuilder()

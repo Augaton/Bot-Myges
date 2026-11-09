@@ -30,13 +30,27 @@ function kordis({ apiStatus = 200 } = {}) {
     };
 }
 
+// Serveurs encore ouverts. Une assertion qui échoue avant stop() laisserait le sien
+// tourner : le fichier de test ne se terminerait plus, et toute la suite resterait bloquée.
+const running = new Set();
+test.afterEach(async () => {
+    for (const panel of [...running]) await stop(panel);
+});
+
 function start(file) {
     return new Promise((resolve) => {
         const server = createPanel({ trustProxy: false, sessionsFile: file });
-        server.listen(0, '127.0.0.1', () => resolve({ server, port: server.address().port }));
+        server.listen(0, '127.0.0.1', () => {
+            const panel = { server, port: server.address().port };
+            running.add(panel);
+            resolve(panel);
+        });
     });
 }
-const stop = ({ server }) => new Promise((resolve) => server.close(resolve));
+const stop = (panel) => new Promise((resolve) => {
+    if (!running.delete(panel)) return resolve();
+    panel.server.close(resolve);
+});
 
 function call({ port }, method, url, { body, cookie } = {}) {
     return new Promise((resolve, reject) => {
@@ -268,4 +282,85 @@ test('mémoire pleine : une session gardée sur disque part la première, et ell
     assert.strictEqual(sessions.get(oldest)?.name, 'Ancienne');
     assert.strictEqual(sessions.get(kept)?.name, 'Gardée');
     assert.ok(sessions.map.size <= 2000);
+});
+
+// « Déconnecter mes autres appareils »
+const others = (panel, cookie) => call(panel, 'POST', '/api/deconnexion-autres', { cookie, body: {} });
+const status = async (panel, cookie) => (await call(panel, 'GET', '/api/session', { cookie })).status;
+const loginAs = (panel, username, remember) => call(panel, 'POST', '/api/login', { body: { username, password: 'motdepasse', remember } });
+
+test('déconnecter mes autres appareils : les autres sessions du compte tombent, celle-ci et les autres comptes restent', async (t) => {
+    quiet(t);
+    kordis();
+    const file = tempFile();
+    const panel = await start(file);
+    const here = cookieOf(await login(panel, true));
+    const phone = cookieOf(await login(panel, true));
+    const borrowed = cookieOf(await login(panel, false));
+    const someoneElse = cookieOf(await loginAs(panel, 'autre.compte', true));
+
+    const res = await others(panel, here);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(JSON.parse(res.text).closed, 2);
+    assert.strictEqual(await status(panel, here), 200);
+    assert.strictEqual(await status(panel, phone), 401);
+    assert.strictEqual(await status(panel, borrowed), 401);
+    assert.strictEqual(await status(panel, someoneElse), 200);
+    await stop(panel);
+});
+
+test('déconnecter mes autres appareils : après un redémarrage, une session pas encore relue est refusée à son retour', async (t) => {
+    quiet(t);
+    kordis();
+    const file = tempFile();
+    let panel = await start(file);
+    const here = cookieOf(await login(panel, true));
+    const phone = cookieOf(await login(panel, true));
+    const someoneElse = cookieOf(await loginAs(panel, 'autre.compte', true));
+    await stop(panel);
+
+    panel = await start(file); // aucune session encore relue : le panel ne sait pas à qui elles sont
+    assert.strictEqual(JSON.parse((await others(panel, here)).text).closed, 0);
+    assert.strictEqual(await status(panel, phone), 401, 'refusée en se présentant');
+    assert.strictEqual(await status(panel, here), 200);
+    assert.strictEqual(await status(panel, someoneElse), 200, 'un autre compte n\'est pas visé');
+    await stop(panel);
+
+    panel = await start(file);
+    assert.strictEqual(await status(panel, here), 200, 'cet appareil reste connecté, même après redémarrage');
+    assert.strictEqual(await status(panel, phone), 401);
+    const again = cookieOf(await login(panel, true)); // se reconnecter ensuite fonctionne
+    await stop(panel);
+    panel = await start(file);
+    assert.strictEqual(await status(panel, again), 200);
+    await stop(panel);
+
+    const saved = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    assert.strictEqual(saved.revoked.length, 1);
+    assert.ok(!JSON.stringify(saved).includes(USERNAME), 'le compte n\'apparaît pas en clair');
+});
+
+test('déconnecter mes autres appareils : origine vérifiée, demandes limitées', async (t) => {
+    quiet(t);
+    kordis();
+    const panel = await start(tempFile());
+    const here = cookieOf(await login(panel, true));
+    const phone = cookieOf(await login(panel, true));
+
+    // Sans en-tête Origin (requête venue d'un autre site) : refusée, rien n'est fermé.
+    const forged = await new Promise((resolve, reject) => {
+        const payload = '{}';
+        const req = http.request({ host: '127.0.0.1', port: panel.port, method: 'POST', path: '/api/deconnexion-autres', agent: false, headers: { Cookie: here, 'Content-Type': 'application/json', 'Content-Length': payload.length } }, (res) => {
+            res.resume();
+            res.on('end', () => resolve(res.statusCode));
+        });
+        req.on('error', reject);
+        req.end(payload);
+    });
+    assert.strictEqual(forged, 403);
+    assert.strictEqual(await status(panel, phone), 200);
+
+    for (let i = 0; i < 5; i++) assert.strictEqual((await others(panel, here)).status, 200);
+    assert.strictEqual((await others(panel, here)).status, 429);
+    await stop(panel);
 });

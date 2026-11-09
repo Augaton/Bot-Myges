@@ -3,8 +3,8 @@ import {
     ComponentType, EmbedBuilder, MessageFlags, SlashCommandBuilder,
 } from 'discord.js';
 import { Command } from '../core/command';
+import { getCurrentYearFor } from '../core/mygesData';
 import { SchoolService } from '../myges/services/school';
-import { getCurrentYear } from '../config';
 import { fetchPhotoBuffer } from '../utils/photo';
 import { byLastName, fullName } from '../utils/format';
 import { logError } from '../utils/logger';
@@ -22,7 +22,7 @@ const command: Command = {
         if (!token) return;
 
         try {
-            const teachers: any[] = await SchoolService.getTeachers(token, getCurrentYear());
+            const teachers: any[] = await SchoolService.getTeachers(token, await getCurrentYearFor(interaction.user.id, token));
             if (!teachers || teachers.length === 0) return interaction.editReply('Aucun professeur trouvé pour cette année.');
 
             // Tri alphabétique par nom de famille (tolérant aux noms manquants)

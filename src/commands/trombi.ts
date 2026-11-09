@@ -3,8 +3,8 @@ import {
     ComponentType, EmbedBuilder, MessageFlags, SlashCommandBuilder,
 } from 'discord.js';
 import { Command } from '../core/command';
+import { getCurrentYearFor } from '../core/mygesData';
 import { SchoolService } from '../myges/services/school';
-import { getCurrentYear } from '../config';
 import { fetchPhotoBuffer } from '../utils/photo';
 import { byLastName, fullName } from '../utils/format';
 import { logError } from '../utils/logger';
@@ -23,7 +23,7 @@ const command: Command = {
 
         try {
             // 1. Récupérer les classes
-            const classes: any[] = await SchoolService.getMyClasses(token, getCurrentYear());
+            const classes: any[] = await SchoolService.getMyClasses(token, await getCurrentYearFor(interaction.user.id, token));
             if (!classes || classes.length === 0) return interaction.editReply('❌ Aucune classe trouvée.');
 
             const maClasse = classes[0];

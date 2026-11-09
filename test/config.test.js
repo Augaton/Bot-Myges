@@ -39,3 +39,24 @@ test('annonce : le lien du panel n\'y figure que s\'il est renseigné, et seulem
     else process.env.PANEL_PUBLIC_URL = before;
     for (const field of buildChangelogEmbed({ user: null }).toJSON().fields) assert.ok(field.value.length <= 1024, field.name);
 });
+
+test('rappel au démarrage : panel lancé sans adresse publique en https', () => {
+    const { panelLinkHint } = dist('config.js');
+    const saved = { port: process.env.PANEL_PORT, url: process.env.PANEL_PUBLIC_URL };
+    try {
+        delete process.env.PANEL_PORT;
+        delete process.env.PANEL_PUBLIC_URL;
+        assert.strictEqual(panelLinkHint(), null); // pas de panel : rien à dire
+        process.env.PANEL_PORT = '8788';
+        assert.match(panelLinkHint(), /PANEL_PUBLIC_URL absent/);
+        process.env.PANEL_PUBLIC_URL = 'http://exemple.test:8443';
+        assert.match(panelLinkHint(), /https:\/\//);
+        process.env.PANEL_PUBLIC_URL = 'https://exemple.test:8443';
+        assert.strictEqual(panelLinkHint(), null);
+    } finally {
+        for (const [key, value] of [['PANEL_PORT', saved.port], ['PANEL_PUBLIC_URL', saved.url]]) {
+            if (value === undefined) delete process.env[key];
+            else process.env[key] = value;
+        }
+    }
+});

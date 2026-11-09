@@ -7,12 +7,11 @@
 //    change de salle ;
 //  • sur demande, un MP chaque matin avec les cours du jour.
 import { Client, EmbedBuilder } from 'discord.js';
-import { getAbsences, getAssignments, getGrades, getTimetable } from '../core/mygesData';
+import { getAbsences, getAssignments, getCurrentYearFor, getGrades, getTimetable } from '../core/mygesData';
 import { getSession, getUserAlerts, loadData, loginFailure, saveData, SavedData, UserAlerts } from '../core/store';
-import { getCurrentYear } from '../config';
 import { decrypt, encrypt, fingerprint } from '../crypto';
 import { sendDM } from '../utils/dm';
-import { courseName, coursePlace, getCourseIcon, snippet } from '../utils/format';
+import { courseName, coursePlace, getCourseIcon, hasDeadlineTime, snippet } from '../utils/format';
 import { log, logError } from '../utils/logger';
 import { md } from '../utils/markdown';
 import { toSubject } from '../utils/notesImage';
@@ -125,8 +124,11 @@ function gradesEmbed(events: GradeEvent[]): EmbedBuilder {
 
 /** Compare les notes à celles déjà vues ; envoie un MP s'il y en a de nouvelles. Vrai si l'état a changé. */
 async function checkGrades({ client, userId, alerts, current }: UserCheck, token: GesAuthenticationToken): Promise<boolean> {
-    const year = getCurrentYear();
-    const raw = await getGrades(userId, token);
+    // L'année en cours selon MyGes : à la rentrée, l'année précédente reste suivie tant
+    // que la nouvelle n'est pas ouverte, rattrapages compris. Le changement d'année, lui,
+    // est mémorisé sans MP (voir plus bas).
+    const year = await getCurrentYearFor(userId, token);
+    const raw = await getGrades(userId, token, year);
     if (!Array.isArray(raw) || !current()) return false;
     const keyed = gradeEvents(raw).map((event) => ({ event, key: fingerprint(`${userId}|${event.id}`) }));
 
@@ -189,8 +191,8 @@ function absencesEmbed(events: AbsenceEvent[]): EmbedBuilder {
 
 /** Compare les absences à celles déjà vues ; envoie un MP s'il y en a de nouvelles. Vrai si l'état a changé. */
 async function checkAbsences({ client, userId, alerts, current }: UserCheck, token: GesAuthenticationToken): Promise<boolean> {
-    const year = getCurrentYear();
-    const raw = await getAbsences(userId, token);
+    const year = await getCurrentYearFor(userId, token);
+    const raw = await getAbsences(userId, token, year);
     if (!Array.isArray(raw) || !current()) return false;
     const keyed = absenceEvents(raw).map((event) => ({ event, key: fingerprint(`${userId}|${event.id}`) }));
 
@@ -272,7 +274,7 @@ function reminderEmbed(d: Deadline, threshold: (typeof REMINDER_THRESHOLDS)[numb
         .setColor(threshold.color)
         .addFields(
             { name: '🎯 Étape', value: md(d.type).slice(0, 1024), inline: true },
-            { name: '🗓️ Échéance', value: `<t:${ts}:F> (<t:${ts}:R>)`, inline: true },
+            { name: '🗓️ Échéance', value: `${hasDeadlineTime(d.at) ? `<t:${ts}:F>` : `<t:${ts}:D>`} (<t:${ts}:R>)`, inline: true },
         )
         .setFooter(FOOTER);
     if (d.desc) embed.addFields({ name: '📝 Consigne', value: md(d.desc).slice(0, 1024) });
@@ -293,7 +295,7 @@ async function checkReminders({ client, userId, alerts, memo, current }: UserChe
     const now = Date.now();
     if (token && (!memo.projects || now - memo.projects.at >= REFRESH_MS)) {
         try {
-            memo.projects = { at: now, list: await getAssignments(userId, token) };
+            memo.projects = { at: now, list: await getAssignments(userId, token, await getCurrentYearFor(userId, token)) };
         } catch (e) {
             if (!memo.projects) throw e;
             // MyGes en panne : mieux vaut un rappel sur la dernière lecture que pas de rappel.

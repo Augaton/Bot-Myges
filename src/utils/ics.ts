@@ -4,6 +4,9 @@ import { courseName, coursePlace } from './format';
 
 const CRLF = '\r\n';
 
+/** Étendue d'un export ou d'un abonnement : 12 semaines à partir du lundi courant. */
+export const ICS_WEEKS = 12;
+
 /** Échappement d'une valeur texte (RFC 5545 §3.3.11). */
 export function escapeText(text: string): string {
     return text

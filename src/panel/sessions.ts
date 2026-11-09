@@ -6,6 +6,11 @@
 // une clé tirée de son cookie. Le serveur ne garde que l'empreinte de ce cookie : un
 // fichier volé, seul, ne donne ni token, ni nom, ni identifiant. Aucune clé à gérer, et
 // le panel reste sans la clé de chiffrement du bot.
+//
+// « Déconnecter mes autres appareils » ferme tout de suite les sessions du compte en
+// mémoire. Celles gardées sur disque et pas encore relues ne se laissent pas reconnaître
+// (le fichier ne dit pas à qui elles sont) : une marque de révocation, sans le compte en
+// clair, les refuse quand elles se présentent, si elles ont été ouvertes avant.
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import { forgetUser } from '../core/mygesData';
@@ -32,6 +37,8 @@ export interface Session {
     expiresAt: number;
     idleUntil: number;
     remember: boolean;
+    /** Ouverture de la session : une révocation vise les sessions ouvertes avant elle. */
+    issuedAt: number;
 }
 
 /** Session sur disque : seule l'échéance est lisible sans le cookie. */
@@ -41,6 +48,19 @@ interface Sealed {
     tag: string;
     expiresAt: number;
 }
+
+/**
+ * Marque « déconnecter mes autres appareils ». Le compte n'y figure pas : seulement
+ * une empreinte salée, vérifiable quand une session déchiffrée dit son compte.
+ * Deviner un identifiant permettrait tout au plus de savoir qu'il a utilisé ce bouton.
+ */
+interface Revocation {
+    salt: string;
+    check: string;
+    before: number;
+}
+
+const accountCheck = (salt: string, account: string) => crypto.createHmac('sha256', Buffer.from(salt, 'hex')).update(account).digest('hex');
 
 // Seule l'empreinte du cookie est gardée : une fuite de la mémoire (trace, vidage)
 // ou du fichier ne donnerait pas de cookie utilisable.
@@ -52,7 +72,7 @@ function seal(cookie: string, id: string, session: Session): Sealed {
     const cipher = crypto.createCipheriv('aes-256-gcm', sealKey(cookie), iv);
     cipher.setAAD(Buffer.from(id)); // une entrée ne peut pas être recopiée sous une autre empreinte
     const { token_type, access_token, expires_at } = session.token;
-    const secret = JSON.stringify({ token: { token_type, access_token, expires_at }, name: session.name, account: session.account, uid: session.uid });
+    const secret = JSON.stringify({ token: { token_type, access_token, expires_at }, name: session.name, account: session.account, uid: session.uid, issued: session.issuedAt });
     const content = Buffer.concat([cipher.update(secret, 'utf8'), cipher.final()]);
     return { iv: iv.toString('hex'), content: content.toString('hex'), tag: cipher.getAuthTag().toString('hex'), expiresAt: session.expiresAt };
 }
@@ -71,12 +91,14 @@ function unseal(cookie: string, id: string, sealed: Sealed): Session {
         expiresAt: sealed.expiresAt,
         idleUntil: sealed.expiresAt,
         remember: true,
+        issuedAt: Number(secret.issued) || 0, // entrée d'avant cette marque : considérée ancienne
     };
 }
 
 export class Sessions {
     private readonly map = new Map<string, Session>();
     private readonly sealed = new Map<string, Sealed>();
+    private revoked: Revocation[] = [];
     private readonly file?: string;
 
     /** `file` : où garder les sessions « Rester connecté ». Sans lui, tout reste en mémoire. */
@@ -103,6 +125,7 @@ export class Sessions {
             expiresAt,
             idleUntil: keep ? expiresAt : now + IDLE_MS,
             remember: keep,
+            issuedAt: now,
         };
         const id = digest(cookie);
         this.map.set(id, session);
@@ -132,6 +155,36 @@ export class Sessions {
         if (cookie) this.remove(digest(cookie));
     }
 
+    /**
+     * Ferme les autres sessions du compte de ce cookie, y compris celles gardées sur
+     * disque ; celle-ci reste ouverte. Renvoie le nombre de sessions fermées sur-le-champ.
+     */
+    closeOthers(cookie: string): number {
+        const id = digest(cookie);
+        const current = this.get(cookie);
+        if (!current) return 0;
+        let closed = 0;
+        for (const [other, session] of [...this.map]) {
+            if (other !== id && session.account === current.account) {
+                this.remove(other);
+                closed++;
+            }
+        }
+        const now = Date.now();
+        const known = this.revoked.find((r) => r.check === accountCheck(r.salt, current.account));
+        if (known) {
+            known.before = now;
+        } else {
+            const salt = crypto.randomBytes(16).toString('hex');
+            this.revoked.push({ salt, check: accountCheck(salt, current.account), before: now });
+        }
+        // Cette session-ci n'est pas visée : elle compte comme ouverte maintenant.
+        current.issuedAt = now;
+        if (this.sealed.has(id)) this.sealed.set(id, seal(cookie, id, current));
+        this.save();
+        return closed;
+    }
+
     /** Ferme une session dont MyGes a refusé le token. */
     drop(session: Session) {
         for (const [id, entry] of this.map) {
@@ -145,6 +198,10 @@ export class Sessions {
         if (!sealed) return null;
         try {
             const session = unseal(cookie, id, sealed);
+            if (this.revoked.some((r) => session.issuedAt < r.before && r.check === accountCheck(r.salt, session.account))) {
+                this.remove(id); // fermée depuis un autre appareil
+                return null;
+            }
             // Le fichier ne dit pas à quel compte une entrée appartient : le plafond par
             // compte ne peut s'appliquer qu'ici, quand le cookie permet de le lire.
             this.makeRoom(session.account);
@@ -199,6 +256,12 @@ export class Sessions {
         for (const [id, sealed] of this.sealed) {
             if (now >= sealed.expiresAt) changed = this.sealed.delete(id) || changed;
         }
+        // Passé la durée maximale d'une session, toutes celles qu'une marque visait ont expiré.
+        const kept = this.revoked.filter((r) => now - r.before < MAX_REMEMBERED_MS);
+        if (kept.length !== this.revoked.length) {
+            this.revoked = kept;
+            changed = true;
+        }
         if (changed) this.save();
     }
 
@@ -218,6 +281,11 @@ export class Sessions {
                     && typeof entry?.tag === 'string' && Number(entry?.expiresAt) > now;
                 if (usable) this.sealed.set(id, { iv: entry.iv, content: entry.content, tag: entry.tag, expiresAt: Number(entry.expiresAt) });
             }
+            for (const entry of Array.isArray(saved?.revoked) ? saved.revoked : []) {
+                const usable = /^[0-9a-f]{32}$/.test(entry?.salt ?? '') && /^[0-9a-f]{64}$/.test(entry?.check ?? '')
+                    && Number.isFinite(entry?.before) && now - entry.before < MAX_REMEMBERED_MS;
+                if (usable) this.revoked.push({ salt: entry.salt, check: entry.check, before: entry.before });
+            }
             fs.chmodSync(file, 0o600);
             log('PANEL', `${this.sealed.size} session(s) « Rester connecté » conservée(s).`);
         } catch (e: any) {
@@ -231,7 +299,7 @@ export class Sessions {
         if (!this.file) return;
         const tmp = `${this.file}.tmp`;
         try {
-            fs.writeFileSync(tmp, JSON.stringify({ version: 1, sessions: Object.fromEntries(this.sealed) }), { mode: 0o600 });
+            fs.writeFileSync(tmp, JSON.stringify({ version: 1, sessions: Object.fromEntries(this.sealed), revoked: this.revoked }), { mode: 0o600 });
             fs.renameSync(tmp, this.file);
             fs.chmodSync(this.file, 0o600);
         } catch (e: any) {

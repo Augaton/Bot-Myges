@@ -21,10 +21,11 @@ import ping from '../commands/ping';
 import config from '../commands/config';
 import alertes from '../commands/alertes';
 import exportIcs from '../commands/export';
+import abonnement from '../commands/abonnement';
 
 // Ordre conservé pour l'affichage dans Discord.
 const all: Command[] = [
-    login, logout, panel, alertes, prochain, agenda, exportIcs, notes, absences, documents, projets, profil,
+    login, logout, panel, alertes, prochain, agenda, exportIcs, abonnement, notes, absences, documents, projets, profil,
     news, profs, trombi, campus, changelog, help, ping, config,
 ];
 

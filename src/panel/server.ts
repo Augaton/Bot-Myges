@@ -12,7 +12,7 @@ process.on('uncaughtException', (err) => {
     process.exit(1);
 });
 
-const { host, port, trustProxy, tls, sessionsFile } = readSettings();
+const { host, port, trustProxy, tls, sessionsFile, feedsDir } = readSettings();
 
 // Code compris par le superviseur : relancer en boucle n'y changerait rien.
 const EXIT_CONFIG = 78;
@@ -26,7 +26,7 @@ if (!tls && !trustProxy && !/^(localhost$|127\.|::1$)/.test(host)) {
 
 let server: ReturnType<typeof createPanel>;
 try {
-    server = createPanel({ trustProxy, tls, sessionsFile });
+    server = createPanel({ trustProxy, tls, sessionsFile, feedsDir });
 } catch (e) {
     logError('PANEL', 'Démarrage impossible (certificat illisible ?) :', e);
     process.exit(EXIT_CONFIG);

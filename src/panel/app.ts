@@ -8,7 +8,7 @@ import * as net from 'node:net';
 import * as path from 'node:path';
 import * as zlib from 'node:zlib';
 import {
-    forgetAssignments, getAbsences, getAnnualDocuments, getAssignments, getClasses, getClassmatePhotos, getClassmates, getCourseFiles, getCourses, getEvents, getGrades, getNews, getProfile, getStudentPhoto, getSyllabus, getTeacherPhotos, getTeachers, getTimetable, getYears,
+    forgetAssignments, getAbsences, getAnnualDocuments, getAssignments, getClasses, getClassmatePhotos, getClassmates, getCourseFiles, getCourses, getEvents, getGrades, getNews, getProfile, getStudentPhoto, getSyllabus, getTeacherPhotos, getTeachers, getTimetable, getCurrentYearFor, getYears,
 } from '../core/mygesData';
 import { BadCredentialsError, FileTooLargeError, MyGesError } from '../myges/errors';
 import { GesAPI } from '../myges/ges-api';
@@ -22,7 +22,8 @@ import {
     acquireDownload, courseSources, MAX_FILE_BYTES, releaseDownload, safeFileName, toDocuments,
 } from '../utils/documents';
 import { fullName } from '../utils/format';
-import { buildIcs } from '../utils/ics';
+import { feedId, openFeed } from '../utils/feedSeal';
+import { buildIcs, ICS_WEEKS } from '../utils/ics';
 import { log, logError } from '../utils/logger';
 import { fetchPhotoBuffer, imageType } from '../utils/photo';
 import { RateLimiter } from '../utils/rateLimit';
@@ -37,7 +38,6 @@ const ANNUAL = 'annual';
 const WINDOW_MS = 15 * 60_000;
 const CERT_RELOAD_MS = 6 * 3_600_000;
 // Durée d'agenda que MyGes sert d'une seule requête, vérifiée sur un vrai compte.
-const ICS_WEEKS = 12;
 // Durée maximale d'un téléchargement, envoi au client compris.
 const DOWNLOAD_DEADLINE_MS = 5 * 60_000;
 
@@ -193,7 +193,7 @@ export function reloadTls(server: https.Server, tls: TlsFiles) {
     }
 }
 
-export function createPanel({ trustProxy, tls, sessionsFile }: { trustProxy: boolean; tls?: TlsFiles; sessionsFile?: string }): http.Server | https.Server {
+export function createPanel({ trustProxy, tls, sessionsFile, feedsDir }: { trustProxy: boolean; tls?: TlsFiles; sessionsFile?: string; feedsDir?: string }): http.Server | https.Server {
     const statics = loadStaticFiles();
     const sessions = new Sessions(sessionsFile);
 
@@ -212,6 +212,10 @@ export function createPanel({ trustProxy, tls, sessionsFile }: { trustProxy: boo
     const photoRequests = new RateLimiter(300, 60_000);
     // Chaque changement d'équipe est une vraie action sur MyGes, et il est journalisé.
     const teamChanges = new RateLimiter(10, WINDOW_MS);
+    // Chaque « déconnecter mes autres appareils » réécrit le fichier des sessions.
+    const sessionChanges = new RateLimiter(5, WINDOW_MS);
+    // Abonnements d'agenda : un calendrier relit le lien quelques fois par heure.
+    const feedReads = new RateLimiter(60, WINDOW_MS);
 
     const clientAddress = (req: http.IncomingMessage) => {
         const peer = req.socket.remoteAddress ?? '';
@@ -297,6 +301,8 @@ export function createPanel({ trustProxy, tls, sessionsFile }: { trustProxy: boo
         const profile = await ProfileService.getProfile(token).catch(() => null);
         const name = profile ? fullName({ firstname: profile?.firstname, lastname: profile?.name }) : username;
         const { cookie, session } = sessions.open(token, name, account, uid, body?.remember === true);
+        // Le premier écran en aura besoin : sa lecture commence pendant que la réponse part.
+        getYears(session.key, token).catch(() => {});
         log('PANEL', 'Connexion réussie.');
         // Sans Max-Age, le cookie disparaît à la fermeture du navigateur.
         const maxAge = session.remember ? `; Max-Age=${Math.max(0, Math.floor((session.expiresAt - Date.now()) / 1000))}` : '';
@@ -311,14 +317,43 @@ export function createPanel({ trustProxy, tls, sessionsFile }: { trustProxy: boo
         sendJson(res, 200, {}, { 'Set-Cookie': `${COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0` });
     }
 
+    /**
+     * Abonnement d'agenda : le fichier préparé par le bot, lisible seulement avec le secret
+     * du lien. Aucune session : un calendrier n'envoie pas de cookie.
+     */
+    async function sendFeed(req: http.IncomingMessage, res: http.ServerResponse, secret: string) {
+        if (!feedReads.hit(networkOf(clientAddress(req)))) throw new HttpError(429, 'Trop de requêtes. Réessaie plus tard.');
+        let ics: string;
+        try {
+            if (!feedsDir) throw new Error('aucun dossier d\'abonnements');
+            ics = openFeed(secret, JSON.parse(await fs.promises.readFile(path.join(feedsDir, `${feedId(secret)}.json`), 'utf-8')));
+        } catch {
+            // Lien inconnu, supprimé ou fichier modifié : même réponse, rien à deviner.
+            throw new HttpError(404, 'Abonnement introuvable.');
+        }
+        res.writeHead(200, { ...HEADERS, 'Content-Type': 'text/calendar; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Disposition': 'inline; filename="agenda.ics"' });
+        res.end(req.method === 'HEAD' ? undefined : ics);
+    }
+
+    /** « Déconnecter mes autres appareils » : cet appareil-ci reste connecté. */
+    async function logoutOthers(req: http.IncomingMessage, res: http.ServerResponse) {
+        assertSameOrigin(req);
+        await readJson(req);
+        const session = requireSession(req);
+        if (!sessionChanges.hit(session.account)) throw new HttpError(429, 'Trop de demandes. Réessaie plus tard.');
+        const closed = sessions.closeOthers(readCookie(req)!);
+        log('PANEL', 'Autres appareils déconnectés.');
+        sendJson(res, 200, { closed });
+    }
+
     async function home(session: Session) {
         const today = startOfDay(new Date());
         const [courses, grades, absences, projects, news, events] = await Promise.allSettled([
             // Six semaines : en alternance, le prochain cours peut être loin.
             read(session, (t) => getTimetable(session.key, t, today, addDays(today, 42))),
-            read(session, (t) => getGrades(session.key, t)),
-            read(session, (t) => getAbsences(session.key, t)),
-            read(session, (t) => getAssignments(session.key, t)),
+            forCurrentYear(session, (y) => read(session, (t) => getGrades(session.key, t, y))),
+            forCurrentYear(session, (y) => read(session, (t) => getAbsences(session.key, t, y))),
+            forCurrentYear(session, (y) => read(session, (t) => getAssignments(session.key, t, y))),
             read(session, (t) => getNews(session.key, t)),
             read(session, (t) => getEvents(session.key, t)),
         ]);
@@ -371,7 +406,7 @@ export function createPanel({ trustProxy, tls, sessionsFile }: { trustProxy: boo
 
     /**
      * Adresse de la photo d'une personne que cet étudiant a le droit de voir : lui-même,
-     * sa classe, ses intervenants, les membres de ses projets. MyGes répond sur n'importe quel identifiant :
+     * sa classe, ses intervenants, les membres de ses projets, y compris ceux des années passées. MyGes répond sur n'importe quel identifiant :
      * sans ce contrôle, le panel deviendrait un annuaire de toute l'école. L'adresse vient
      * toujours de MyGes, jamais du navigateur.
      */
@@ -381,13 +416,23 @@ export function createPanel({ trustProxy, tls, sessionsFile }: { trustProxy: boo
             return profile?._links?.photo?.href ?? null;
         }
         const id = Number(who);
+        const year = await currentYear(session);
         const classmates = await read(session, (t) => getClassmatePhotos(session.key, t));
         if (classmates[String(id)]) return classmates[String(id)];
-        const teachers = await read(session, (t) => getTeacherPhotos(session.key, t));
+        const teachers = await read(session, (t) => getTeacherPhotos(session.key, t, year));
         if (teachers[String(id)]) return teachers[String(id)];
-        const assignments = await read(session, (t) => getAssignments(session.key, t));
-        if (!teamMemberIds(assignments).has(id)) return null;
-        return read(session, (t) => getStudentPhoto(session.key, t, id));
+        const assignments = await read(session, (t) => getAssignments(session.key, t, year));
+        if (teamMemberIds(assignments).has(id)) return read(session, (t) => getStudentPhoto(session.key, t, id));
+        // Équipiers des projets des années passées : des personnes avec qui il a travaillé.
+        const others = (await read(session, (t) => getYears(session.key, t))).filter((other) => other !== year);
+        for (const other of others) {
+            const past = await read(session, (t) => getAssignments(session.key, t, other)).catch((e) => {
+                if (e instanceof HttpError && e.status === 401) throw e;
+                return [];
+            });
+            if (teamMemberIds(past).has(id)) return read(session, (t) => getStudentPhoto(session.key, t, id));
+        }
+        return null;
     }
 
     /** Relaie une photo sans l'écrire nulle part : ni disque, ni cache, ici comme dans le navigateur. */
@@ -412,7 +457,10 @@ export function createPanel({ trustProxy, tls, sessionsFile }: { trustProxy: boo
         if (!teamChanges.hit(session.account)) throw new HttpError(429, 'Trop de changements d\'équipe. Réessaie plus tard.');
 
         forgetAssignments(session.key);
-        const raw = await read(session, (t) => getAssignments(session.key, t));
+        // Toujours l'année en cours : un projet d'une année passée n'y figure pas, et ne
+        // peut donc jamais être modifié, quoi que demande le navigateur.
+        const year = await currentYear(session);
+        const raw = await read(session, (t) => getAssignments(session.key, t, year));
         const detail = projectDetail(raw, id, session.uid);
         const team = detail?.teams.find((t) => t.id === teamId);
         if (!detail || !team) throw new HttpError(404, 'Équipe introuvable.');
@@ -433,7 +481,7 @@ export function createPanel({ trustProxy, tls, sessionsFile }: { trustProxy: boo
         log('PANEL', `Équipe ${joining ? 'rejointe' : 'quittée'}.`);
 
         forgetAssignments(session.key);
-        const fresh = await read(session, (t) => getAssignments(session.key, t));
+        const fresh = await read(session, (t) => getAssignments(session.key, t, year));
         sendJson(res, 200, projectDetail(fresh, id, session.uid));
     }
 
@@ -441,9 +489,26 @@ export function createPanel({ trustProxy, tls, sessionsFile }: { trustProxy: boo
      * Année demandée par `?year=` : l'une de celles que MyGes propose à cet étudiant.
      * Sans paramètre, l'année en cours.
      */
+    /** Année en cours selon MyGes (voir getCurrentYearFor). */
+    const currentYear = (session: Session) => read(session, (t) => getCurrentYearFor(session.key, t));
+
+    /**
+     * Lecture pour l'année en cours, sans attendre de connaître celle-ci : l'année du
+     * calendrier est la bonne, sauf à la rentrée tant que MyGes n'a pas ouvert la
+     * nouvelle. Dans ce cas seulement, on relit pour la bonne année.
+     */
+    async function forCurrentYear<T>(session: Session, load: (year: string) => Promise<T>): Promise<T> {
+        const guess = getCurrentYear();
+        const early = load(guess);
+        const year = await currentYear(session);
+        if (year === guess) return early;
+        early.catch(() => {}); // lecture inutile : son échec ne compte pas
+        return load(year);
+    }
+
     async function askedYear(session: Session, url: URL): Promise<string> {
         const asked = url.searchParams.get('year');
-        if (!asked) return getCurrentYear();
+        if (!asked) return currentYear(session);
         if (!/^\d{4}$/.test(asked)) throw new HttpError(400, 'Année invalide.');
         const years = await read(session, (t) => getYears(session.key, t));
         if (!years.includes(asked)) throw new HttpError(404, 'Année indisponible.');
@@ -528,8 +593,11 @@ export function createPanel({ trustProxy, tls, sessionsFile }: { trustProxy: boo
             res.end(body);
             return;
         }
+        const feedRoute = url.pathname.match(/^\/agenda\/([A-Za-z0-9_-]{43})\.ics$/);
+        if ((req.method === 'GET' || req.method === 'HEAD') && feedRoute) return sendFeed(req, res, feedRoute[1]);
         if (req.method === 'POST' && url.pathname === '/api/login') return login(req, res);
         if (req.method === 'POST' && url.pathname === '/api/logout') return logout(req, res);
+        if (req.method === 'POST' && url.pathname === '/api/deconnexion-autres') return logoutOthers(req, res);
         const teamRoute = url.pathname.match(/^\/api\/projets\/([\w-]{1,40})\/equipes\/([\w-]{1,40})\/(rejoindre|quitter)$/);
         if (req.method === 'POST' && teamRoute) return changeTeam(req, res, teamRoute[1], teamRoute[2], teamRoute[3]);
         if (req.method !== 'GET') throw new HttpError(405, 'Méthode refusée.');
@@ -545,7 +613,8 @@ export function createPanel({ trustProxy, tls, sessionsFile }: { trustProxy: boo
             case '/api/agenda': return sendJson(res, 200, await agenda(session(), url));
             case '/api/annees': {
                 const s = session();
-                return sendJson(res, 200, { current: getCurrentYear(), years: await read(s, (t) => getYears(s.key, t)) });
+                const [current, years] = await Promise.all([currentYear(s), read(s, (t) => getYears(s.key, t))]);
+                return sendJson(res, 200, { current, years });
             }
             case '/api/notes': {
                 const s = session();
@@ -567,7 +636,8 @@ export function createPanel({ trustProxy, tls, sessionsFile }: { trustProxy: boo
             }
             case '/api/projets': {
                 const s = session();
-                return sendJson(res, 200, projectsView(await read(s, (t) => getAssignments(s.key, t)), s.uid));
+                const year = await askedYear(s, url);
+                return sendJson(res, 200, projectsView(await read(s, (t) => getAssignments(s.key, t, year)), s.uid));
             }
             case '/api/evenements': {
                 const s = session();
@@ -582,7 +652,7 @@ export function createPanel({ trustProxy, tls, sessionsFile }: { trustProxy: boo
                 });
                 const [classmates, teachers] = await Promise.all([
                     optional(read(s, (t) => getClassmates(s.key, t))),
-                    optional(read(s, (t) => getTeachers(s.key, t))),
+                    optional(currentYear(s).then((year) => read(s, (t) => getTeachers(s.key, t, year)))),
                 ]);
                 return sendJson(res, 200, directoryView(classmates, teachers));
             }
@@ -590,7 +660,7 @@ export function createPanel({ trustProxy, tls, sessionsFile }: { trustProxy: boo
                 const s = session();
                 const [profile, classes] = await Promise.all([
                     read(s, (t) => getProfile(s.key, t)),
-                    read(s, (t) => getClasses(s.key, t)).catch((e) => {
+                    currentYear(s).then((year) => read(s, (t) => getClasses(s.key, t, year))).catch((e) => {
                         if (e instanceof HttpError && e.status === 401) throw e;
                         return [];
                     }),
@@ -636,8 +706,11 @@ export function createPanel({ trustProxy, tls, sessionsFile }: { trustProxy: boo
         if (projectRoute) {
             const s = session();
             const [, id, kind, fileId] = projectRoute;
-            const detail = projectDetail(await read(s, (t) => getAssignments(s.key, t)), id, s.uid);
-            if (!detail) throw new HttpError(404, 'Projet introuvable.');
+            const year = await askedYear(s, url);
+            const found = projectDetail(await read(s, (t) => getAssignments(s.key, t, year)), id, s.uid);
+            if (!found) throw new HttpError(404, 'Projet introuvable.');
+            // Une année passée se consulte seulement : aucun changement d'équipe proposé.
+            const detail = year === await currentYear(s) ? found : { ...found, archived: true, canJoin: false, canLeave: false };
             if (!kind) return sendJson(res, 200, detail);
             // Seuls les fichiers affichés à cet étudiant se téléchargent : MyGes servirait
             // peut-être aussi le dépôt d'un autre groupe à partir de son numéro.

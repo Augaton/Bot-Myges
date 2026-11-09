@@ -33,8 +33,9 @@ test('notes, rappel la veille et changement d\'agenda : premier passage silencie
 
     // Passage 1 : connexion, notes et absences (mémorisées), projets et TP (rendu
     // dans 20 h → rappel « demain »), agenda (mémorisé).
+    const years = () => json(200, { result: [2026] }); // l'année en cours selon MyGes, lue une fois
     mockFetch([
-        login(), json(200, { result: grades }), json(200, { result: absences }), json(200, { result: projects }),
+        login(), years(), json(200, { result: grades }), json(200, { result: absences }), json(200, { result: projects }),
         new Response(null, { status: 204 }), json(200, { result: lesson(26) }),
     ]);
     await runPersonalCheck(client);
@@ -42,7 +43,7 @@ test('notes, rappel la veille et changement d\'agenda : premier passage silencie
 
     // Passage 2, une heure plus tard : une nouvelle note, et le cours a été déplacé.
     t.mock.timers.tick(61 * 60_000);
-    mockFetch([
+    mockFetch([ // la liste des années est encore en cache (3 h)
         json(200, { result: [{ ...grades[0], grades: [15, 17.5] }] }),
         json(200, { result: [...absences, { course_name: 'Réseaux', date: now - 2 * H, justified: false }] }),
         json(200, { result: projects }),

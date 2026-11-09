@@ -193,3 +193,19 @@ export function getCourseIcon(name: string, modality: string): string {
 
     return '📘'; // Défaut
 }
+
+const parisClock = new Intl.DateTimeFormat('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+
+/**
+ * Vrai si une échéance porte une heure. MyGes enregistre parfois une date seule, à
+ * minuit (UTC ou heure de Paris) : l'afficher à « 01:00 » serait faux.
+ */
+export function hasDeadlineTime(at: number): boolean {
+    return Number.isFinite(at) && at % 86_400_000 !== 0 && parisClock.format(at) !== '00:00';
+}
+
+/** Échéance pour Discord, dans le fuseau de chacun : date et heure, ou date seule. */
+export function discordDeadline(at: number): string {
+    const ts = Math.floor(at / 1000);
+    return hasDeadlineTime(at) ? `<t:${ts}:f>` : `<t:${ts}:D>`;
+}

@@ -56,6 +56,8 @@ export interface SavedData {
     users: { [discordId: string]: { user: EncryptedData; pass: EncryptedData; refusedNotified?: boolean } };
     guilds: { [guildId: string]: GuildConfig };
     alerts: { [discordId: string]: UserAlerts };
+    // Secret du lien d'abonnement d'agenda, chiffré comme les identifiants.
+    feeds?: { [discordId: string]: { secret: EncryptedData } };
     crypto?: KdfParams;
 }
 

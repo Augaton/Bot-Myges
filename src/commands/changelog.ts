@@ -11,27 +11,38 @@ export function buildChangelogEmbed(client: Client): EmbedBuilder {
     // Annonce publique : le lien du panel n'y figure que s'il a été renseigné.
     const panelLink = panelPublicUrl();
     return new EmbedBuilder()
-        .setTitle(`🚀 Mise à jour ${BOT_VERSION} - "Tes années passées"`)
-        .setDescription('Retrouve tes notes, absences et supports de cours des années précédentes, et les étudiants de toutes tes promotions.')
+        .setTitle(`🚀 Mise à jour ${BOT_VERSION} - "Ton agenda dans ton téléphone"`)
+        .setDescription('Abonne ton calendrier à ton agenda MyGES, retrouve tes projets des années passées, et l\'annuaire sépare ta classe de tes promotions.')
         .setColor(0x5865f2)
         .setThumbnail(client.user?.displayAvatarURL() || null)
         .addFields(
             {
-                name: '🗂️ Tes années passées',
+                name: '📅 Abonnement d\'agenda',
                 value:
-                    '• Dans le panel : un choix **Année** en haut de Notes, Absences et Documents. Pratique pour réviser avec les supports de l\'an dernier.\n' +
-                    '• Sur Discord : `/notes` et `/absences` ont une option `annee`.',
+                    '• `/abonnement` te donne un lien à coller dans Google Agenda ou ton iPhone : ton agenda s\'y met à jour tout seul.\n' +
+                    '• Garde-le pour toi. « Nouveau lien » le remplace, « Supprimer » le coupe.',
             },
             {
-                name: '👥 Annuaire',
+                name: '🗂️ Projets et années passées',
                 value:
-                    '• Les étudiants de **toutes tes promotions**, avec la promotion sous chaque nom.\n' +
-                    '• Toujours uniquement les personnes avec qui tu as été en classe.',
+                    '• Les projets des années passées dans le panel, en consultation.\n' +
+                    '• L\'heure limite des rendus, quand MyGES la donne.\n' +
+                    '• Les supports du cours depuis la page d\'un projet, et l\'option `annee` sur `/documents`.',
+            },
+            {
+                name: '👥 Annuaire et appareils',
+                value:
+                    '• **Ma classe** et tes **promotions** séparées dans l\'annuaire.\n' +
+                    '• Mon profil : **déconnecter tes autres appareils**, pratique si tu perds ton téléphone.',
+            },
+            {
+                name: '🎒 Rentrée',
+                value: '• Tant que MyGES n\'a pas ouvert la nouvelle année, la précédente reste affichée, et un rattrapage déclenche bien une alerte.',
             },
             {
                 name: '🌐 Le panel étudiant',
                 value:
-                    '• `/panel` te donne le lien. Pages plus rapides à charger.\n' +
+                    '• `/panel` te donne le lien. Pages plus rapides au premier chargement.\n' +
                     '• Service non officiel, sans lien avec MyGES ni le Réseau GES.' +
                     (panelLink ? `\n• Accès : ${panelLink}` : ''),
             },

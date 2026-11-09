@@ -6,6 +6,8 @@
 saved_data.json*
 # Sessions du panel, chiffrées : elles restent sur le serveur
 panel_sessions.json*
+# Abonnements d'agenda, chiffrés : préparés par le bot pour le panel
+/panel_feeds
 # Certificats HTTPS du panel
 /certs
 *.pem

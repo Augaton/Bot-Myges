@@ -1,7 +1,8 @@
 import { ChatInputCommandInteraction, EmbedBuilder, MessageFlags, SlashCommandBuilder } from 'discord.js';
 import { Command } from '../core/command';
 import { getAbsences } from '../core/mygesData';
-import { chosenYear, getCurrentYear, yearChoices, yearLabel } from '../utils/schoolYear';
+import { yearLabel } from '../utils/schoolYear';
+import { resolveYear, yearAutocomplete, yearOption } from '../utils/yearOption';
 import { logError } from '../utils/logger';
 import { apiErrorMessage, sessionFor } from '../utils/replies';
 import { shareRow } from '../utils/share';
@@ -10,19 +11,22 @@ const command: Command = {
     data: new SlashCommandBuilder()
         .setName('absences')
         .setDescription('Les absences enregistrées sur MyGes')
-        .addStringOption((option) => option
-            .setName('annee')
-            .setDescription('Année scolaire (par défaut : l\'année en cours)')
-            .addChoices(...yearChoices())),
+        .addStringOption(yearOption),
+
+    autocomplete: yearAutocomplete,
 
     execute: async (interaction: ChatInputCommandInteraction) => {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const token = await sessionFor(interaction);
         if (!token) return;
 
-        const year = chosenYear(interaction.options.getString('annee'));
         let abs: any[];
+        let year: string;
+        let current: string;
         try {
+            const resolved = await resolveYear(interaction, token);
+            if (!resolved) return interaction.editReply('Année indisponible pour ton compte.');
+            ({ year, current } = resolved);
             abs = await getAbsences(interaction.user.id, token, year);
         } catch (e) {
             logError('ABSENCES', 'Récupération des absences impossible :', e);
@@ -30,7 +34,7 @@ const command: Command = {
         }
         if (!Array.isArray(abs)) abs = [];
 
-        const past = year !== getCurrentYear();
+        const past = year !== current;
         const embed = new EmbedBuilder().setTitle(`🚫 Absences${past ? ` ${yearLabel(year)}` : ''} (${abs.length})`).setColor(0xff0000);
 
         if (!abs.length) {

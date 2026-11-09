@@ -1,7 +1,7 @@
 import { ChatInputCommandInteraction, EmbedBuilder, MessageFlags, SlashCommandBuilder } from 'discord.js';
 import { Command } from '../core/command';
-import { getAssignments } from '../core/mygesData';
-import { getNextStep, snippet } from '../utils/format';
+import { getAssignments, getCurrentYearFor } from '../core/mygesData';
+import { discordDeadline, getNextStep, snippet } from '../utils/format';
 import { logError } from '../utils/logger';
 import { md } from '../utils/markdown';
 import { apiErrorMessage, sessionFor } from '../utils/replies';
@@ -18,7 +18,7 @@ const command: Command = {
         if (!token) return;
 
         try {
-            const projects = await getAssignments(interaction.user.id, token);
+            const projects = await getAssignments(interaction.user.id, token, await getCurrentYearFor(interaction.user.id, token));
             const now = Date.now();
 
             // On ne garde que les projets et TP ayant une étape future
@@ -52,7 +52,7 @@ const command: Command = {
                 const diffDays = Math.ceil((step.date - now) / 86400000);
                 const urgent = diffDays <= 3 ? '🔴' : diffDays <= 7 ? '🟠' : '🟢';
 
-                const lines = [`🎯 ${md(step.type)} · 🗓️ <t:${ts}:D> (**<t:${ts}:R>**)`];
+                const lines = [`🎯 ${md(step.type)} · 🗓️ ${discordDeadline(step.date)} (**<t:${ts}:R>**)`];
                 if (p.course_name) lines.unshift(`📚 **${md(p.course_name)}**`);
                 const desc = snippet(p.project_teaching_goals);
                 if (desc) lines.push(`> ${md(desc)}`);

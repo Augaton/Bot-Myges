@@ -15,16 +15,11 @@ export function yearLabel(year: string): string {
     return `${year}-${Number(year) + 1}`;
 }
 
-/** Choix d'une commande du bot : l'année en cours puis les précédentes, fixés au démarrage. */
+/** Les dernières années : repli de l'autocomplétion quand MyGes ne peut pas répondre à temps. */
 export function yearChoices(count = 5): { name: string; value: string }[] {
     const current = Number(getCurrentYear());
     return Array.from({ length: count }, (_, i) => {
         const year = String(current - i);
         return { name: i === 0 ? `${yearLabel(year)} (en cours)` : yearLabel(year), value: year };
     });
-}
-
-/** Année choisie dans une commande ; l'année en cours si rien de valable n'est donné. */
-export function chosenYear(value: string | null | undefined): string {
-    return /^\d{4}$/.test(value ?? '') ? value! : getCurrentYear();
 }

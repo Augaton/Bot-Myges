@@ -1,7 +1,6 @@
 import { ChatInputCommandInteraction, EmbedBuilder, MessageFlags, SlashCommandBuilder } from 'discord.js';
 import { Command } from '../core/command';
-import { getCurrentYear } from '../config';
-import { getProfile } from '../core/mygesData';
+import { getCurrentYearFor, getProfile } from '../core/mygesData';
 import { SchoolService } from '../myges/services/school';
 import { fullName } from '../utils/format';
 import { logError } from '../utils/logger';
@@ -20,7 +19,7 @@ const command: Command = {
         try {
             const p = await getProfile(interaction.user.id, token);
             // La classe n'est pas dans le profil : MyGes la donne par année scolaire.
-            const classes: any = await SchoolService.getMyClasses(token, getCurrentYear()).catch(() => null);
+            const classes: any = await SchoolService.getMyClasses(token, await getCurrentYearFor(interaction.user.id, token)).catch(() => null);
             const className = Array.isArray(classes) ? classes.map((c: any) => c?.name).filter(Boolean).join(', ') : '';
             // `p.name` porte le nom de famille côté MyGes : on réutilise le
             // helper commun, qui garantit une valeur non vide (Discord refuse

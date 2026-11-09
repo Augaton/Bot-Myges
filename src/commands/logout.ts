@@ -3,6 +3,7 @@ import { Command } from '../core/command';
 import { closeSession, hasAccount, loadData, saveData } from '../core/store';
 import { forgetUser } from '../core/mygesData';
 import { log } from '../utils/logger';
+import { removeFeed } from '../tasks/agendaFeeds';
 
 const command: Command = {
     data: new SlashCommandBuilder()
@@ -26,6 +27,7 @@ const command: Command = {
         forgetUser(interaction.user.id);
 
         // 3. On supprime du disque (identifiants et alertes)
+        removeFeed(interaction.user.id); // le lien d'abonnement cesse de fonctionner
         const data = loadData();
         delete data.users[interaction.user.id];
         delete data.alerts[interaction.user.id];

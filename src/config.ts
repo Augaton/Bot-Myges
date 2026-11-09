@@ -44,6 +44,8 @@ export const CHECK_INTERVAL = 60 * 60 * 1000;
  * pointe ainsi toujours sur le même fichier. Surchargeable via DB_FILE.
  */
 export const DB_FILE = process.env.DB_FILE || path.join(ROOT, 'saved_data.json');
+// Abonnements d'agenda chiffrés : écrits par le bot, servis par le panel (même dossier).
+export const FEEDS_DIR = process.env.PANEL_FEEDS_DIR || path.join(ROOT, 'panel_feeds');
 
 /** Codes d'accès des campus (hors dépôt, voir campus.example.json). */
 export const CAMPUS_FILE = process.env.CAMPUS_FILE || path.join(ROOT, 'campus.json');
@@ -72,4 +74,12 @@ export { getCurrentYear } from './utils/schoolYear';
 export function panelPublicUrl(): string {
     const url = process.env.PANEL_PUBLIC_URL ?? '';
     return url.startsWith('https://') ? url : '';
+}
+
+/** Rappel au démarrage : le panel tourne, mais /panel et l'annonce n'auront pas de lien. */
+export function panelLinkHint(): string | null {
+    if (!process.env.PANEL_PORT || panelPublicUrl()) return null;
+    return process.env.PANEL_PUBLIC_URL
+        ? 'PANEL_PUBLIC_URL doit commencer par https:// : /panel ne donne aucun lien, l\'annonce non plus.'
+        : 'PANEL_PUBLIC_URL absent : /panel ne donne aucun lien, l\'annonce non plus. Exemple : PANEL_PUBLIC_URL=https://<adresse>:8443';
 }

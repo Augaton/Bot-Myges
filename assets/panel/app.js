@@ -15,6 +15,9 @@ const time = (t) => timeFormat.format(t);
 const capitalize = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 const day = (t) => capitalize(dayFormat.format(t));
 const grade = (v) => gradeFormat.format(v);
+// MyGES enregistre parfois une échéance sans heure, à minuit (UTC ou Paris) : date seule alors.
+const hasTime = (t) => t % DAY !== 0 && time(t) !== '00:00';
+const deadline = (t, format = shortFormat) => (hasTime(t) ? `${format.format(t)} à ${time(t)}` : format.format(t));
 const plural = (n, word) => `${n} ${word}${n > 1 ? 's' : ''}`;
 
 function h(tag, props = {}, ...children) {
@@ -87,7 +90,7 @@ async function downloadFile(path, fileName, button, zone, status = button) {
   status.textContent = 'Envoi…';
   zone.querySelector('[role="alert"]')?.remove();
   try {
-    const res = await api(`${path}?name=${encodeURIComponent(fileName)}`);
+    const res = await api(`${path}${path.includes('?') ? '&' : '?'}name=${encodeURIComponent(fileName)}`);
     const url = URL.createObjectURL(await res.blob());
     h('a', { href: url, download: fileName }).click();
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
@@ -106,7 +109,7 @@ async function downloadFile(path, fileName, button, zone, status = button) {
 
 function showLogin(message = '') {
   clearCache();
-  schoolYear = '';
+  setSchoolYear('');
   const error = h('p', { class: 'field-error', role: 'alert', hidden: !message }, message);
   const username = h('input', { id: 'username', name: 'username', autocomplete: 'username', autocapitalize: 'none', spellcheck: 'false', required: true, maxlength: 100 });
   const password = h('input', { id: 'password', name: 'password', type: 'password', autocomplete: 'current-password', required: true, maxlength: 200 });
@@ -353,9 +356,9 @@ function showCourse(c) {
 }
 
 /** Supports et syllabus de la matière, ajoutés dès qu'ils sont là : la fenêtre s'ouvre sans attendre. */
-async function addCourseExtras(rcId, dialog, body) {
+async function addCourseExtras(rcId, dialog, body, year = '') {
   const [sources, syllabus] = await Promise.all([
-    load('/api/documents').catch(() => []),
+    load(year ? `/api/documents?year=${year}` : '/api/documents').catch(() => []),
     load(`/api/courses/${rcId}/syllabus`).catch(() => null),
   ]);
   if (!dialog.isConnected) return;
@@ -363,6 +366,7 @@ async function addCourseExtras(rcId, dialog, body) {
     body.append(h('button', {
       type: 'button',
       onclick: () => {
+        setSchoolYear(year); // les supports de l'année de ce cours
         openFolder = rcId;
         dialog.close();
         location.hash = '#documents';
@@ -405,7 +409,7 @@ function deadlineRow(p) {
     h('span', { class: 'end small' },
       p.date === null
         ? [h('span', { class: 'line muted' }, 'Terminé'), p.last > 0 && h('span', { class: 'line muted' }, shortFormat.format(p.last))]
-        : [h('span', { class: `line ${soon ? 'danger' : ''}` }, relative(p.date)), h('span', { class: 'line muted' }, shortFormat.format(p.date))])));
+        : [h('span', { class: `line ${soon ? 'danger' : ''}` }, relative(p.date)), h('span', { class: 'line muted' }, deadline(p.date))])));
 }
 
 /** Carte d'un projet en cours : mêmes zones, à la même place, d'une carte à l'autre. */
@@ -420,7 +424,7 @@ function projectCard(p) {
     h('span', { class: 'card-foot' },
       p.stepsTotal > 0 && h('span', { class: 'line small' }, `Étape ${p.stepsDone} sur ${p.stepsTotal}`),
       p.stepsTotal > 0 && progressBar(p.stepsDone, p.stepsTotal),
-      h('span', { class: 'line small muted' }, `${p.type}, ${shortFormat.format(p.date)}`),
+      h('span', { class: 'line small muted' }, `${p.type}, ${deadline(p.date)}`),
       p.group === null
         ? h('span', { class: 'line small danger' }, 'Pas encore de groupe')
         : h('span', { class: 'line small muted' }, p.group))));
@@ -625,6 +629,7 @@ function agendaExport() {
   zone.append(
     h('h2', {}, 'Dans ton calendrier'),
     h('p', { class: 'muted small body-text' }, 'Les 12 prochaines semaines, à importer dans Google Agenda ou le calendrier de ton téléphone. C\'est une copie : réimporte-la si ton agenda change.'),
+    h('p', { class: 'muted small body-text' }, 'Pour un calendrier qui se met à jour tout seul : la commande /abonnement sur Discord.'),
     h('div', { class: 'toolbar' }, button));
   return zone;
 }
@@ -794,7 +799,7 @@ function showSubject(subject) {
     ['Retards', subject.lates > 0 && String(subject.lates)],
     ['Intervenant', subject.teacher],
   ]));
-  if (subject.rcId) addCourseExtras(subject.rcId, dialog, body);
+  if (subject.rcId) addCourseExtras(subject.rcId, dialog, body, schoolYear);
 }
 
 function subjectRow(subject) {
@@ -844,22 +849,41 @@ function semesterSummary(semester) {
     h('p', { class: 'muted small' }, progress));
 }
 
-// Année consultée dans Notes, Absences et Documents ; vide pour l'année en cours.
-let schoolYear = '';
+// Année consultée dans Notes, Absences, Documents et Projets ; vide pour l'année en cours.
+// Gardée dans l'onglet : recharger la page ne la perd pas. Oubliée à la déconnexion.
+const YEAR_KEY = 'annee';
+let schoolYear = (() => {
+  try {
+    const stored = sessionStorage.getItem(YEAR_KEY) ?? '';
+    return /^\d{4}$/.test(stored) ? stored : '';
+  } catch {
+    return ''; // stockage refusé (navigation privée…) : l'année reste en mémoire
+  }
+})();
+
+function setSchoolYear(year) {
+  schoolYear = year;
+  try {
+    if (year) sessionStorage.setItem(YEAR_KEY, year);
+    else sessionStorage.removeItem(YEAR_KEY);
+  } catch {
+    /* stockage refusé : sans conséquence */
+  }
+}
 const yearLabel = (year) => `${year}-${Number(year) + 1}`;
-const withYear = (path) => (schoolYear ? `${path}?year=${schoolYear}` : path);
+const withYear = (path) => (schoolYear ? `${path}${path.includes('?') ? '&' : '?'}year=${schoolYear}` : path);
 
 /** Choix de l'année ; absent quand MyGES n'en connaît qu'une. */
 async function yearField() {
   const { current, years } = await load('/api/annees').catch((e) => (e.status === 401 ? Promise.reject(e) : { current: '', years: [] }));
   // Une liste connue qui ne contient plus l'année choisie : retour à l'année en cours.
   // Une liste indisponible ne doit pas, elle, changer en silence l'année affichée.
-  if (schoolYear && years.length && !years.includes(schoolYear)) schoolYear = '';
+  if (schoolYear && years.length && !years.includes(schoolYear)) setSchoolYear('');
   if (years.length < 2) return schoolYear ? h('p', { class: 'muted small' }, `Année ${yearLabel(schoolYear)}`) : null;
   const select = h('select', {
     id: 'annee',
     onchange: (e) => {
-      schoolYear = e.target.value === current ? '' : e.target.value;
+      setSchoolYear(e.target.value === current ? '' : e.target.value);
       render();
     },
   }, years.map((year) => h('option', { value: year, selected: year === (schoolYear || current) }, year === current ? `${yearLabel(year)} (en cours)` : yearLabel(year))));
@@ -958,8 +982,9 @@ async function absencesView() {
 }
 
 async function projectsView() {
-  const items = await load('/api/projets');
-  if (!items.length) return empty('Aucun projet ni TP pour le moment.');
+  const picker = await yearField();
+  const items = await load(withYear('/api/projets'));
+  if (!items.length) return [picker && h('div', { class: 'filters' }, picker), empty(schoolYear ? `Aucun projet ni TP en ${yearLabel(schoolYear)}.` : 'Aucun projet ni TP pour le moment.')];
 
   const running = items.filter((p) => p.date !== null);
   const finished = items.filter((p) => p.date === null);
@@ -979,12 +1004,14 @@ async function projectsView() {
   show();
   const search = h('input', { id: 'recherche-projet', type: 'search', oninput: (e) => show(e.target.value) });
   return [
+    picker && h('div', { class: 'filters' }, picker),
     items.length > 5 && h('div', { class: 'narrow-field' }, h('label', { for: 'recherche-projet' }, 'Rechercher un projet'), search),
     holder,
   ];
 }
 
 function stepState(step, nextDate) {
+  if (step.date === null) return { name: 'future', label: 'Date non fixée' };
   if (step.date === nextDate) return { name: 'next', label: 'Prochaine étape' };
   return step.date < Date.now() ? { name: 'past', label: 'Terminée' } : { name: 'future', label: 'À venir' };
 }
@@ -1069,7 +1096,7 @@ function projectInfoPage(p) {
     const button = h('button', {
       type: 'button',
       'aria-label': `Télécharger ${file.title}`,
-      onclick: () => downloadFile(`/api/projets/${p.id}/${kind}/${file.id}`, file.fileName, button, zone),
+      onclick: () => downloadFile(withYear(`/api/projets/${p.id}/${kind}/${file.id}`), file.fileName, button, zone),
     }, 'Télécharger');
     return h('li', {},
       h('div', { class: 'grow' }, h('div', { class: 'name' }, file.title), file.date && h('div', { class: 'muted small' }, dateFormat.format(file.date))),
@@ -1081,7 +1108,7 @@ function projectInfoPage(p) {
     const state = stepState(step, nextDate);
     return h('li', { class: state.name },
       h('h3', {}, step.type),
-      h('p', { class: 'small' }, `${dateFormat.format(step.date)}, ${state.label.toLowerCase()}${state.name === 'past' ? '' : ` (${relative(step.date)})`}`),
+      h('p', { class: 'small' }, step.date === null ? state.label : `${deadline(step.date, dateFormat)}, ${state.label.toLowerCase()}${state.name === 'past' ? '' : ` (${relative(step.date)})`}`),
       step.desc && h('p', { class: 'body-text small' }, step.desc),
       step.files.length
         ? h('ul', { class: 'rows' }, step.files.map((file) => fileRow('depots', file)))
@@ -1111,6 +1138,15 @@ function projectInfoPage(p) {
     p.files.length > 0 && section('Fichiers du projet', h('ul', { class: 'rows' }, p.files.map((file) => fileRow('consignes', file)))),
   ].filter(Boolean));
 
+  // Supports de la matière du projet, si elle en a cette année-là.
+  const courseLink = h('div');
+  if (p.rcId) {
+    load(withYear('/api/documents')).then((sources) => {
+      if (!sources.some((source) => source.id === p.rcId)) return;
+      courseLink.append(h('button', { type: 'button', onclick: () => { openFolder = p.rcId; location.hash = '#documents'; } }, 'Voir les supports de cours'));
+    }).catch(() => {});
+  }
+
   return h('div', { class: 'project-page' },
     zone,
     h('div', { class: 'column' },
@@ -1123,7 +1159,7 @@ function projectInfoPage(p) {
         ['Taille', size],
         ['Outils', p.tools],
         ['Bibliographie', p.books],
-      ])),
+      ]), courseLink),
       group,
       p.activity.length > 0 && h('details', {}, h('summary', {}, `Activité du groupe (${p.activity.length})`),
         h('ul', { class: 'activity' }, p.activity.map((event) => h('li', {},
@@ -1132,12 +1168,13 @@ function projectInfoPage(p) {
 }
 
 async function projectView(title, id, tab) {
-  const p = await load(`/api/projets/${encodeURIComponent(id ?? '')}`);
+  const p = await load(withYear(`/api/projets/${encodeURIComponent(id ?? '')}`));
   title.textContent = p.name;
   const onTeams = tab === 'equipes';
   const link = (label, suffix, current) => h('a', { href: `#projet/${p.id}${suffix}`, class: 'tab', 'aria-current': current ? 'page' : null }, label);
   return [
     h('a', { href: '#projets', class: 'small' }, 'Tous les projets'),
+    p.archived && h('p', { class: 'muted small' }, `Projet de ${yearLabel(schoolYear)} : consultation seulement.`),
     h('div', { class: 'chips', role: 'navigation', 'aria-label': 'Pages du projet' },
       link('Informations', '', !onTeams),
       link(`Équipes (${p.teams.length})`, '/equipes', onTeams)),
@@ -1150,7 +1187,20 @@ let directoryTab = 'classe';
 async function directoryView() {
   const { classmates, teachers } = await load('/api/annuaire');
   if (!classmates.length && !teachers.length) return empty('Annuaire indisponible pour le moment.');
-  if (directoryTab === 'classe' && !classmates.length) directoryTab = 'intervenants';
+
+  // Ma classe (cette année) d'un côté, les autres promotions de l'autre.
+  const pools = {
+    classe: classmates.filter((person) => person.current),
+    promotions: classmates.filter((person) => !person.current),
+    intervenants: teachers,
+  };
+  const tabs = [
+    ['classe', `Ma classe (${pools.classe.length})`],
+    pools.promotions.length && ['promotions', `Promotions (${pools.promotions.length})`],
+    ['intervenants', `Intervenants (${pools.intervenants.length})`],
+  ].filter(Boolean);
+  // L'onglet retenu d'une visite à l'autre peut être devenu vide (autre compte, année sans promo).
+  if (!pools[directoryTab]?.length) directoryTab = tabs.find(([id]) => pools[id].length)?.[0] ?? 'classe';
 
   let query = '';
   const list = h('ul', { class: 'directory' });
@@ -1162,15 +1212,14 @@ async function directoryView() {
       /^[^\s@]+@[^\s@]+$/.test(person.email ?? '') && h('a', { class: 'small', href: `mailto:${encodeURI(person.email)}` }, person.email)));
   const show = () => {
     const needle = query.trim().toLocaleLowerCase('fr');
-    const pool = directoryTab === 'classe' ? classmates : teachers;
-    const found = pool.filter((person) => `${person.name} ${person.group ?? ''}`.toLocaleLowerCase('fr').includes(needle));
+    const found = (pools[directoryTab] ?? []).filter((person) => `${person.name} ${person.group ?? ''}`.toLocaleLowerCase('fr').includes(needle));
     list.replaceChildren(...(found.length ? found.map(card) : [h('li', { class: 'muted' }, 'Personne ne correspond.')]));
   };
   show();
   const search = h('input', { id: 'recherche-annuaire', type: 'search', oninput: (e) => { query = e.target.value; show(); } });
   return [
     h('div', { class: 'filters' },
-      filterChips('Choisir une liste', [['classe', `Étudiants (${classmates.length})`], ['intervenants', `Intervenants (${teachers.length})`]], directoryTab, (id) => { directoryTab = id; show(); }),
+      filterChips('Choisir une liste', tabs, directoryTab, (id) => { directoryTab = id; show(); }),
       h('div', { class: 'narrow-field' }, h('label', { for: 'recherche-annuaire' }, 'Chercher une personne ou une promotion'), search)),
     list,
   ];
@@ -1210,8 +1259,27 @@ async function profileView(title) {
         ['Promotion', unique('promotion')],
         ['École', unique('school')],
       ])),
+    devicesSection(),
     installSection(),
   ];
+}
+
+/** Fermer d'ici les sessions ouvertes ailleurs : un téléphone perdu, un ordinateur prêté. */
+function devicesSection() {
+  const done = h('p', { class: 'muted small', role: 'status' });
+  const button = h('button', {
+    type: 'button',
+    onclick: () => confirmAction(
+      'Déconnecter tes autres appareils ?',
+      'Tes sessions ouvertes sur d\'autres navigateurs ou téléphones seront fermées, y compris celles où tu as coché « Rester connecté ». Cet appareil reste connecté.',
+      'Déconnecter les autres',
+      async () => {
+        await post('/api/deconnexion-autres');
+        done.textContent = 'Tes autres appareils sont déconnectés.';
+      },
+    ),
+  }, 'Déconnecter mes autres appareils');
+  return section('Appareils', h('p', { class: 'muted small' }, 'Un téléphone perdu, un ordinateur prêté : ferme d\'ici les sessions ouvertes ailleurs.'), button, done);
 }
 
 async function newsView() {

@@ -120,6 +120,7 @@ async function openCommand(userId) {
     const collector = Object.assign(new EventEmitter(), { resetTimer() {} });
     const interaction = {
         user: { id: userId },
+        options: { getString: () => null },
         deferReply: async () => {},
         editReply: async (reply) => {
             replies.push(typeof reply === 'string' ? reply : { ...reply, components: reply.components?.map((r) => r.toJSON()) });
@@ -152,6 +153,7 @@ test('/documents : matière, liste des fichiers, puis fichier reçu en privé', 
 
     const calls = mockFetch([
         new Response(null, { status: 302, headers: { location: 'x:/#access_token=t&token_type=bearer&expires_in=86400' } }),
+        json(200, { result: [Number(dist('utils/schoolYear.js').getCurrentYear())] }), // années de l'étudiant
         json(200, { result: [{ rc_id: 42, name: 'T1 - Réseaux', has_documents: true }] }),
         json(200, { result: [{ oc_id: 7, label: 'Cours 1', extension: '.pdf', update_date: 1776702686256 }] }),
         file('%PDF', { 'content-type': 'application/pdf' }),

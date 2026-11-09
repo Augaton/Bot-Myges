@@ -123,3 +123,102 @@ test('MyGes ne donne pas les années : les dernières sont proposées, une anné
     assert.strictEqual(empty.status, 200);
     assert.deepStrictEqual(empty.json, []);
 });
+
+// Projet d'une année passée qui, s'il était de l'année en cours, serait modifiable :
+// choix libre, étape à venir, une équipe avec de la place, étudiant sans groupe.
+const pastProject = {
+    project_id: 501, name: 'Projet passé', course_name: 'Web', rc_id: 77, project_type_group: 'Libre', project_max_student_group: 3,
+    steps: [{ psp_id: 1, psp_limit_date: Date.now() + 5 * 86_400_000, psp_type: 'Rendu' }, { psp_id: 2, psp_limit_date: null, psp_type: 'Soutenance' }],
+    groups: [{ project_group_id: 61, group_name: 'Équipe libre', project_group_students: [{ u_id: 9 }] }],
+    project_files: [{ pf_id: 900, pf_title: 'Sujet', pf_file: 'sujet.pdf' }],
+};
+let writes = [];
+
+function kordisProjects() {
+    urls = [];
+    writes = [];
+    globalThis.fetch = async (url, init = {}) => {
+        const u = String(url);
+        urls.push(u);
+        if (u.includes('oauth')) return redirect('x:/#access_token=t&token_type=bearer&expires_in=3600');
+        if ((init.method ?? 'GET') !== 'GET') writes.push(`${init.method} ${u}`);
+        if (u.endsWith('/me')) return json(200, { result: { normalized_role: 'student', uid: 7 } });
+        if (u.endsWith('/me/years')) return json(200, { result: [past, current] });
+        if (u.endsWith(`/me/${past}/projects`)) return json(200, { result: [pastProject] });
+        if (u.endsWith('/me/projectFiles/900')) return new Response('%PDF', { headers: { 'content-type': 'application/pdf' } });
+        return json(200, { result: [] });
+    };
+}
+
+test('projets d\'une année passée : liste et détail lus pour cette année, en consultation seulement', async (t) => {
+    kordisProjects();
+    await signIn(t, 'annees.projets');
+    const list = await call('GET', `/api/projets?year=${past}`);
+    assert.strictEqual(list.status, 200);
+    assert.deepStrictEqual(list.json.map((p) => p.name), ['Projet passé']);
+    assert.ok(urls.some((u) => u.endsWith(`/me/${past}/projects`)) && urls.some((u) => u.endsWith(`/me/${past}/practicals`)), urls.join(' '));
+
+    const detail = await call('GET', `/api/projets/501?year=${past}`);
+    assert.strictEqual(detail.status, 200);
+    assert.strictEqual(detail.json.archived, true);
+    assert.strictEqual(detail.json.canJoin, false);
+    assert.strictEqual(detail.json.canLeave, false);
+    assert.strictEqual((await call('GET', '/api/projets/501')).status, 404, 'absent de l\'année en cours');
+});
+
+test('projets d\'une année passée : fichiers téléchargeables avec l\'année, introuvables sans', async (t) => {
+    kordisProjects();
+    await signIn(t, 'annees.fichiers');
+    assert.strictEqual((await call('GET', `/api/projets/501/consignes/900?year=${past}`)).status, 200);
+    assert.strictEqual((await call('GET', '/api/projets/501/consignes/900')).status, 404);
+});
+
+test('projets d\'une année passée : impossible de changer d\'équipe, aucune écriture envoyée à MyGes', async (t) => {
+    kordisProjects();
+    await signIn(t, 'annees.equipe');
+    for (const path of ['/api/projets/501/equipes/61/rejoindre', `/api/projets/501/equipes/61/rejoindre?year=${past}`]) {
+        assert.strictEqual((await call('POST', path, {})).status, 404, path);
+    }
+    assert.deepStrictEqual(writes, []);
+});
+
+test('rentrée : l\'année que MyGes n\'a pas encore ouverte n\'est ni proposée ni utilisée par défaut', async (t) => {
+    kordis({ years: () => json(200, { result: [past - 1, past] }) }); // l'année du calendrier manque
+    await signIn(t, 'annees.rentree');
+    const years = await call('GET', '/api/annees');
+    assert.deepStrictEqual(years.json, { current: String(past), years: [String(past), String(past - 1)] });
+
+    urls = [];
+    const notes = await call('GET', '/api/notes');
+    assert.match(JSON.stringify(notes.json), /Ancienne matière/);
+    assert.ok(urls.some((u) => u.endsWith(`/me/${past}/grades`)) && !urls.some((u) => u.endsWith(`/me/${current}/grades`)), urls.join(' '));
+    assert.strictEqual((await call('GET', `/api/notes?year=${current}`)).status, 404);
+});
+
+test('accueil : l\'année du calendrier est lue sans attendre ; à la rentrée, la bonne année l\'emporte', async (t) => {
+    const grades = (u) => urls.filter((x) => /\/me\/\d{4}\/grades$/.test(x) && x === u).length;
+    kordis(); // MyGes connaît l'année du calendrier : une seule lecture des notes
+    await signIn(t, 'annees.accueil');
+    urls = [];
+    const home = await call('GET', '/api/home');
+    assert.match(JSON.stringify(home.json.semester), /Matière actuelle/);
+    assert.strictEqual(urls.filter((u) => /\/grades$/.test(u)).length, 1, urls.join(' '));
+
+    kordis({ years: () => json(200, { result: [past - 1, past] }) }); // rentrée : l'année du calendrier n'est pas ouverte
+    await signIn(t, 'annees.accueil.rentree');
+    urls = [];
+    const lag = await call('GET', '/api/home');
+    assert.match(JSON.stringify(lag.json.semester), /Ancienne matière/);
+    assert.doesNotMatch(JSON.stringify(lag.json.semester), /Matière actuelle/);
+    assert.ok(grades(urls.find((u) => u.endsWith(`/me/${past}/grades`))) === 1, urls.join(' '));
+});
+
+test('connexion : la liste des années est lue aussitôt, pour le premier écran', async (t) => {
+    kordis();
+    t.mock.method(console, 'log', () => {});
+    cookie = '';
+    urls = [];
+    assert.strictEqual((await call('POST', '/api/login', { username: 'annees.prefetch', password: 'x' })).status, 200);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.ok(urls.some((u) => u.endsWith('/me/years')), urls.join(' '));
+});

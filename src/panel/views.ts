@@ -88,7 +88,8 @@ function projectSteps(project: any, group: any) {
             id: String(step?.psp_id ?? ''),
             type: String(step?.psp_type || 'Étape'),
             desc: paragraphs(step?.psp_desc, 1_000),
-            date: Number(step?.psp_limit_date),
+            // Sans date : null. Number(null) vaudrait 0, soit le 1er janvier 1970.
+            date: Number(step?.psp_limit_date) || null,
             files: group
                 ? list(step?.files)
                     .filter((f) => Number(f?.pgr_id) === Number(group.project_group_id) && f?.psf_id != null)
@@ -100,8 +101,8 @@ function projectSteps(project: any, group: any) {
                     }))
                 : [],
         }))
-        .filter((step) => Number.isFinite(step.date))
-        .sort((a, b) => a.date - b.date);
+        // Les étapes datées dans l'ordre, puis celles sans date.
+        .sort((a, b) => (a.date ?? Infinity) - (b.date ?? Infinity) || 0);
 }
 
 /** Tous les projets et TP : à venir d'abord, par échéance, puis les terminés. */
@@ -120,8 +121,8 @@ export function projectsView(raw: any, uid: number | null = null) {
             practical: !!p?.practical,
             type: next ? String(next.type) : '',
             date: next ? Number(next.date) : null,
-            last: steps.at(-1)?.date ?? 0,
-            stepsDone: steps.filter((s) => s.date <= now).length,
+            last: Math.max(0, ...steps.map((s) => s.date ?? 0)),
+            stepsDone: steps.filter((s) => s.date !== null && s.date <= now).length,
             stepsTotal: steps.length,
             group: group ? String(group?.group_name ?? '') : null,
         });
@@ -223,7 +224,8 @@ export function directoryView(classmates: any[], teachers: any[]) {
     const name = (person: any) => fullName({ firstname: person.firstname, lastname: person.lastname });
     return {
         // Étudiants de toutes les promotions, regroupés par promotion puis par nom.
-        classmates: [...list(classmates)].sort(byGroupName).map((person) => ({ id: person.id, name: name(person), group: String(person.group ?? '') })),
+        // `current` distingue ma classe (cette année) des autres promotions.
+        classmates: [...list(classmates)].sort(byGroupName).map((person) => ({ id: person.id, name: name(person), group: String(person.group ?? ''), current: Boolean(person.current) })),
         teachers: [...list(teachers)].sort(byName).map((person) => ({ id: person.id, name: name(person), email: person.email })),
     };
 }

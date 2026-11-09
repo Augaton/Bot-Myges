@@ -220,6 +220,7 @@ test('rappels : chiffrés, et l\'ancien format repris sans renvoyer ce qui est d
     ];
     mockFetch([
         new Response(null, { status: 302, headers: { location: 'x:/#access_token=t&token_type=bearer&expires_in=86400' } }),
+        json(200, { result: [2026] }), // l'année en cours selon MyGes
         json(200, { result: projects }), json(200, { result: [] }),
     ]);
     await runPersonalCheck(client);

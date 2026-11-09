@@ -6,7 +6,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const { dist, json, redirect } = require('./helpers');
 
 const { createPanel } = dist('panel/app.js');
@@ -87,7 +87,7 @@ test('isolation : le panel ne charge ni Discord, ni le canvas, ni les secrets du
         const {readSettings}=require(${JSON.stringify(path.join(__dirname, '..', 'dist', 'panel', 'settings.js'))});
         require(${JSON.stringify(path.join(__dirname, '..', 'dist', 'panel', 'app.js'))});
         const s=readSettings(${JSON.stringify(envFile)});
-        const loaded=Object.keys(require.cache).filter((k)=>/node_modules|canvas/.test(k));
+        const loaded=Object.keys(require.cache).filter((k)=>/node_modules|canvas|dist[\\\\/]crypto\\.js|core[\\\\/]store\\.js/.test(k));
         process.stdout.write(JSON.stringify({s,loaded,token:process.env.DISCORD_TOKEN??null,key:process.env.ENCRYPTION_KEY??null}));`;
     const env = { ...process.env };
     delete env.DISCORD_TOKEN;
@@ -98,16 +98,38 @@ test('isolation : le panel ne charge ni Discord, ni le canvas, ni les secrets du
     assert.deepStrictEqual(result.loaded, []);
     assert.strictEqual(result.token, null);
     assert.strictEqual(result.key, null);
-    const { sessionsFile, ...settings } = result.s;
+    const { sessionsFile, feedsDir, ...settings } = result.s;
     assert.deepStrictEqual(settings, { host: '127.0.0.1', port: 4321, trustProxy: true });
     assert.strictEqual(sessionsFile, path.join(dir, 'panel_sessions.json'));
+    assert.strictEqual(feedsDir, path.join(dir, 'panel_feeds'));
 });
 
-test('derrière un proxy, le panel démarre en HTTP sur 0.0.0.0 et le signale', () => {
+test('derrière un proxy, le panel démarre en HTTP sur 0.0.0.0 et le signale', async () => {
     const entry = path.join(__dirname, '..', 'dist', 'panel', 'server.js');
-    const out = spawnSync(process.execPath, [entry], { env: { ...process.env, PANEL_HOST: '0.0.0.0', PANEL_PORT: '0', PANEL_TRUST_PROXY: '1' }, encoding: 'utf-8', timeout: 4_000 });
-    assert.notStrictEqual(out.status, 78);
-    assert.match(out.stdout, /doit rester privé/);
+    // Le serveur ne s'arrête jamais seul : on l'arrête dès qu'il a parlé. Délai large,
+    // la suite entière tourne en parallèle et peut ralentir son démarrage.
+    const child = spawn(process.execPath, [entry], { env: { ...process.env, PANEL_HOST: '0.0.0.0', PANEL_PORT: '0', PANEL_TRUST_PROXY: '1' } });
+    let stdout = '';
+    const ended = new Promise((resolve) => child.on('close', resolve));
+    const spoke = await new Promise((resolve) => {
+        const timer = setTimeout(() => resolve(false), 20_000);
+        child.stdout.on('data', (chunk) => {
+            stdout += chunk;
+            if (/doit rester privé/.test(stdout)) {
+                clearTimeout(timer);
+                resolve(true);
+            }
+        });
+        child.on('close', () => {
+            clearTimeout(timer);
+            resolve(false);
+        });
+    });
+    const code = child.exitCode;
+    child.kill('SIGTERM');
+    await ended;
+    assert.notStrictEqual(code, 78);
+    assert.ok(spoke, stdout);
 });
 
 test('adresses privées : seul un proxy local ou du réseau privé est cru', () => {

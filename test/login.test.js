@@ -49,6 +49,22 @@ test('reconnexion avec un autre compte MyGes : l\'historique des alertes repart 
     assert.strictEqual(store.loadData().alerts.u1.grades, false);
 });
 
+test('reconnexion avec un autre compte MyGes : le lien d\'abonnement d\'agenda est coupé', async () => {
+    const { createFeed, feedSecret } = dist('tasks/agendaFeeds.js');
+    mockFetch([accepted()]);
+    assert.match(await submit('u8', 'c.trois'), /Connexion réussie/);
+    const secret = createFeed('u8');
+
+    mockFetch([accepted()]);
+    assert.match(await submit('u8', 'C.Trois'), /Connexion réussie/); // même compte : le lien reste
+    assert.strictEqual(feedSecret('u8'), secret);
+
+    mockFetch([accepted()]);
+    assert.match(await submit('u8', 'd.quatre'), /Connexion réussie/); // autre compte : il servait l'ancien, il est coupé
+    assert.strictEqual(feedSecret('u8'), null);
+    assert.strictEqual(store.loadData().feeds?.u8, undefined);
+});
+
 test('un « : » dans l\'identifiant ne contourne pas la limite par identifiant', async () => {
     // En Basic, « cible:essai » testerait le mot de passe « essai… » sur « cible »
     // tout en comptant les tentatives sur un identifiant toujours différent.
@@ -90,3 +106,4 @@ test('pulvérisation : plafond global d\'échecs, tous comptes et identifiants c
     assert.ok(replies.some((r) => /Trop d'échecs/.test(r)));
     assert.ok(calls.length <= 30);
 });
+

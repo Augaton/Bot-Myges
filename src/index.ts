@@ -1,5 +1,5 @@
 // En premier : charge le .env et fixe le fuseau horaire avant tout le reste.
-import { BOT_VERSION, CAMPUS_FILE, CHECK_INTERVAL, DB_FILE, ENV_FILE, EXIT_CONFIG } from './config';
+import { BOT_VERSION, CAMPUS_FILE, CHECK_INTERVAL, DB_FILE, ENV_FILE, EXIT_CONFIG, panelLinkHint } from './config';
 import * as fs from 'node:fs';
 import {
     ActivityType, Client, Events, GatewayIntentBits, MessageFlags, Options, Status,
@@ -10,6 +10,7 @@ import { handleLoginModal, LOGIN_MODAL_ID } from './commands/login';
 import { runProjectCheck } from './tasks/projects';
 import { PERSONAL_CHECK_INTERVAL, runPersonalCheck } from './tasks/personalAlerts';
 import { announceUpdateIfNeeded } from './tasks/announceUpdate';
+import { FEED_INTERVAL, runFeedRefresh } from './tasks/agendaFeeds';
 import { log, logError } from './utils/logger';
 import { RateLimiter } from './utils/rateLimit';
 import { handleShare, SHARE_ID } from './utils/share';
@@ -145,6 +146,8 @@ client.on(Events.GuildDelete, (guild) => forgetGuild(guild.id));
 // --- INIT ---
 client.once(Events.ClientReady, async (ready) => {
     log('BOOT', `Bot connecté : ${ready.user.tag} (${BOT_VERSION}) · Node ${process.version} · fuseau ${process.env.TZ}`);
+    const panelHint = panelLinkHint();
+    if (panelHint) log('PANEL', panelHint);
 
     // 1. Statut (instantané visuellement)
     ready.user.setPresence({
@@ -174,6 +177,9 @@ client.once(Events.ClientReady, async (ready) => {
         // démarrage, le temps que la passerelle se stabilise.
         setTimeout(() => runPersonalCheck(client), 2 * 60_000),
         setInterval(() => runPersonalCheck(client), PERSONAL_CHECK_INTERVAL),
+        // Abonnements d'agenda : 3 min après le démarrage, puis toutes les 30 min.
+        setTimeout(runFeedRefresh, 3 * 60_000),
+        setInterval(runFeedRefresh, FEED_INTERVAL),
         setInterval(watchGateway, 60_000),
         setInterval(logHealth, 60 * 60 * 1000),
     );
@@ -187,6 +193,12 @@ client.once(Events.ClientReady, async (ready) => {
 const commandLimiter = new RateLimiter(10, 30_000);
 
 client.on(Events.InteractionCreate, async (interaction) => {
+    if (interaction.isAutocomplete()) {
+        const command = commands.get(interaction.commandName);
+        // Une proposition qui échoue ne doit rien casser : la liste reste simplement vide.
+        await command?.autocomplete?.(interaction).catch((e) => logError('CMD', `Autocomplétion /${interaction.commandName} :`, e));
+        return;
+    }
     if (interaction.isChatInputCommand()) {
         const command = commands.get(interaction.commandName);
         if (!command) return;

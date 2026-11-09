@@ -212,3 +212,25 @@ test('agenda : export .ics en pièce jointe, en une seule lecture de MyGES', asy
     assert.strictEqual(calls.filter((u) => u.includes('/me/agenda')).length, 1);
     assert.strictEqual((await call('GET', '/api/agenda.ics')).status, 401);
 });
+
+test('photos : un équipier d\'un projet d\'une année passée est permis, un inconnu ne l\'est toujours pas', async () => {
+    const calls = myges();
+    const base = globalThis.fetch;
+    const cur = Number(dist('utils/schoolYear.js').getCurrentYear());
+    globalThis.fetch = async (url) => {
+        const u = String(url);
+        const answer = (result) => {
+            calls.push(u);
+            return json(200, { result });
+        };
+        if (u.endsWith('/me/years')) return answer([cur - 1, cur]);
+        if (u.endsWith(`/me/${cur}/projects`)) return answer([]);
+        if (u.endsWith(`/me/${cur - 1}/projects`)) return answer([{ project_id: 30, groups: [{ project_group_id: 9, project_group_students: [{ u_id: 55 }] }] }]);
+        if (u.endsWith('/me/students/55')) return answer({ uid: 55, _links: { photo: { href: TEAM } } });
+        return base(url);
+    };
+    const cookie = await signIn();
+    assert.strictEqual((await call('GET', '/api/photos/55', { cookie })).status, 200);
+    assert.notStrictEqual((await call('GET', '/api/photos/56', { cookie })).status, 200);
+    assert.ok(!calls.some((u) => u.endsWith('/me/students/56')), 'un inconnu n\'est jamais cherché sur MyGES');
+});

@@ -61,8 +61,8 @@ test.before(() => new Promise((resolve) => {
 test.after(() => server.close());
 
 /** Navigateur minimal : cookie gardé d'une requête à l'autre, comme le ferait le vrai. */
-function browser() {
-    let cookie = '';
+function browser({ storage, cookie: startCookie = '' } = {}) {
+    let cookie = startCookie;
     let rawCookie = '';
     const blobs = [];
     const requests = [];
@@ -104,6 +104,7 @@ function browser() {
         location,
         history: { replaceState() { location.hash = ''; } },
         fetch: send,
+        ...(storage ? { sessionStorage: storage } : {}),
         URL: { createObjectURL: (blob) => { blobs.push(blob); return 'blob:x'; }, revokeObjectURL() {} },
         setTimeout: () => 0,
         clearTimeout() {},
@@ -123,6 +124,7 @@ function browser() {
         windowListeners,
         failNext: (status, html) => { failure = { status, html }; },
         lastCookie: () => rawCookie,
+        cookieValue: () => cookie,
         settle,
         text: () => root.textContent,
         byId: (id) => root.all((e) => e.attrs.id === id)[0],
@@ -547,10 +549,10 @@ test('panel qui redémarre : la réponse de nginx donne un message clair', async
     const page = browser();
     await page.settle();
     await page.signIn('redemarre', 'bon');
-    // Projets : sa première requête est la donnée elle-même (Notes demande d'abord la
-    // liste des années, facultative, dont l'échec n'empêche pas l'affichage).
+    // Actualités : sa première requête est la donnée elle-même (les écrans par année
+    // demandent d'abord la liste des années, facultative, dont l'échec n'empêche rien).
     page.failNext(503, '<html>indisponible</html>');
-    await page.go('projets');
+    await page.go('actualites');
     assert.match(page.alerts().join(), /Le panel redémarre/);
 });
 
@@ -567,7 +569,7 @@ test('annuaire et profil : listes, recherche, e-mail d\'intervenant, export de l
     await page.signIn('annuaire', 'bon');
 
     await page.go('annuaire');
-    assert.match(page.text(), /Étudiants \(2\)/);
+    assert.match(page.text(), /Ma classe \(2\)/);
     assert.match(page.text(), /Léa Martin/);
     assert.match(page.text(), /Promo 2026/); // la promotion de l'étudiant est affichée
     const search = page.byId('recherche-annuaire');
@@ -1063,4 +1065,163 @@ test('années : pas de sélecteur quand MyGES n\'en connaît qu\'une', async (t)
     await page.go('notes');
     assert.strictEqual(page.byId('annee'), undefined);
     assert.match(page.text(), /Réseaux/);
+});
+
+test('annuaire : « Ma classe » et « Promotions » séparées, bascule entre les deux', async (t) => {
+    t.mock.method(console, 'log', () => {});
+    const { getCurrentYear } = dist('utils/schoolYear.js');
+    const cur = Number(getCurrentYear());
+    const past = cur - 1;
+    mygesMock([
+        ['/me/years', () => json(200, { result: [past, cur] })],
+        [`/${cur}/classes`, () => json(200, { result: [{ puid: 30, promotion: 'M2 actuelle' }] })],
+        [`/${past}/classes`, () => json(200, { result: [{ puid: 31, promotion: 'M1 ancienne' }] })],
+        ['/classes/30/students', () => json(200, { result: [{ uid: 1, firstname: 'Actu', lastname: 'Elle' }] })],
+        ['/classes/31/students', () => json(200, { result: [{ uid: 2, firstname: 'Anci', lastname: 'Enne' }] })],
+    ]);
+    const page = browser();
+    await page.settle();
+    await page.signIn('split', 'bon');
+
+    await page.go('annuaire');
+    assert.match(page.text(), /Ma classe \(1\)/);
+    assert.match(page.text(), /Promotions \(1\)/);
+    assert.match(page.text(), /Actu Elle/);
+    assert.doesNotMatch(page.text(), /Anci Enne/); // rangée sous Promotions, pas encore affichée
+
+    await page.root.all((e) => e.className === 'tab' && e.textContent.includes('Promotions'))[0].click();
+    assert.match(page.text(), /Anci Enne/);
+    assert.match(page.text(), /M1 ancienne/);
+    assert.doesNotMatch(page.text(), /Actu Elle/);
+});
+
+test('annuaire : une seule année, pas d\'onglet Promotions', async (t) => {
+    t.mock.method(console, 'log', () => {});
+    const { getCurrentYear } = dist('utils/schoolYear.js');
+    const cur = Number(getCurrentYear());
+    mygesMock([
+        ['/me/years', () => json(200, { result: [cur] })],
+        [`/${cur}/classes`, () => json(200, { result: [{ puid: 30, promotion: 'M2 actuelle' }] })],
+        ['/classes/30/students', () => json(200, { result: [{ uid: 1, firstname: 'Actu', lastname: 'Elle' }] })],
+    ]);
+    const page = browser();
+    await page.settle();
+    await page.signIn('seule', 'bon');
+
+    await page.go('annuaire');
+    assert.match(page.text(), /Ma classe \(1\)/);
+    assert.doesNotMatch(page.text(), /Promotions \(/);
+});
+
+test('projets d\'une année passée : choix de l\'année, consultation seulement, étape sans date, lien vers les supports', async (t) => {
+    t.mock.method(console, 'log', () => {});
+    const { getCurrentYear } = dist('utils/schoolYear.js');
+    const cur = Number(getCurrentYear());
+    const past = cur - 1;
+    const old = Date.now() - 200 * 86_400_000;
+    mygesMock([
+        ['/me/years', () => json(200, { result: [past, cur] })],
+        [`/${past}/projects`, () => json(200, { result: [{
+            project_id: 501, name: 'Projet passé', course_name: 'Web', rc_id: 77, project_type_group: 'Libre', project_max_student_group: 3,
+            steps: [{ psp_id: 1, psp_limit_date: old, psp_type: 'Rendu' }, { psp_id: 2, psp_limit_date: null, psp_type: 'Soutenance' }],
+            groups: [{ project_group_id: 61, group_name: 'Équipe libre', project_group_students: [{ u_id: 9 }] }],
+        }] })],
+        [`/${past}/practicals`, () => json(200, { result: [] })],
+        [`/${past}/courses`, () => json(200, { result: [{ rc_id: 77, name: 'Ancien cours', has_documents: true, trimester: 'Semestre 2' }] })],
+    ]);
+    const page = browser();
+    await page.settle();
+    await page.signIn('projets.anciens', 'bon');
+
+    await page.go('projets');
+    await page.byId('annee').fire('change', { target: { value: String(past) } });
+    await page.settle();
+    assert.match(page.text(), /Projet passé/);
+    assert.doesNotMatch(page.text(), /Projet Web/);
+
+    await page.go('projet/501');
+    assert.ok(page.requests.includes(`/api/projets/501?year=${past}`), page.requests.join(' '));
+    assert.match(page.text(), new RegExp(`Projet de ${past}-${cur} : consultation seulement`));
+    assert.match(page.text(), /Date non fixée/);
+    assert.doesNotMatch(page.text(), /1970/);
+
+    await page.button('Voir les supports de cours').click();
+    page.windowListeners.hashchange();
+    await page.settle();
+    assert.ok(page.requests.includes(`/api/documents?year=${past}`), page.requests.join(' '));
+    assert.ok(page.root.all((e) => e.tag === 'h2' && e.textContent.includes('Ancien cours')).length, 'dossier de la matière ouvert');
+
+    await page.go('projet/501/equipes');
+    assert.match(page.text(), /Équipe libre/);
+    assert.strictEqual(page.button('Rejoindre'), undefined, 'aucune action sur une année passée');
+});
+
+test('échéances : l\'heure limite s\'affiche, une date seule (minuit UTC) reste sans heure', async (t) => {
+    t.mock.method(console, 'log', () => {});
+    const now = new Date();
+    const day = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 4);
+    const timed = day + 15 * H + 47 * 60_000; // 16:47 ou 17:47 à Paris
+    const dateOnly = day + 2 * 86_400_000; // minuit UTC : 01:00 ou 02:00 à Paris
+    const clock = (t) => new Intl.DateTimeFormat('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' }).format(t);
+    mygesMock([
+        ['/projects', () => json(200, { result: [
+            { project_id: 1, name: 'Avec heure', steps: [{ psp_id: 1, psp_limit_date: timed, psp_type: 'Rendu' }] },
+            { project_id: 2, name: 'Sans heure', steps: [{ psp_id: 2, psp_limit_date: dateOnly, psp_type: 'Rendu' }] },
+        ] })],
+        ['/practicals', () => json(200, { result: [] })],
+    ]);
+    const page = browser();
+    await page.settle();
+    await page.signIn('heures', 'bon');
+    await page.go('projets');
+    assert.match(page.text(), new RegExp(`à ${clock(timed)}`));
+    assert.doesNotMatch(page.text(), new RegExp(`à ${clock(dateOnly)}`));
+});
+
+test('mon profil : déconnecter mes autres appareils, après confirmation', async (t) => {
+    t.mock.method(console, 'log', () => {});
+    mygesMock();
+    const page = browser();
+    await page.settle();
+    await page.signIn('appareils', 'bon');
+    await page.go('profil');
+    await page.button('Déconnecter mes autres appareils').click();
+    const dialog = page.root.all((e) => e.tag === 'dialog')[0];
+    assert.match(dialog.textContent, /Cet appareil reste connecté/);
+    await dialog.all((e) => e.tag === 'button' && e.textContent === 'Déconnecter les autres')[0].click();
+    await page.settle();
+    assert.ok(page.requests.includes('/api/deconnexion-autres'), page.requests.join(' '));
+    assert.match(page.text(), /Tes autres appareils sont déconnectés/);
+    assert.ok(page.byId('contenu'), 'toujours connecté');
+});
+
+const memoryStorage = () => {
+    const items = new Map();
+    return { getItem: (k) => (items.has(k) ? items.get(k) : null), setItem: (k, v) => items.set(k, String(v)), removeItem: (k) => items.delete(k) };
+};
+
+test('année choisie : retrouvée au rechargement de l\'onglet, oubliée à la déconnexion', async (t) => {
+    t.mock.method(console, 'log', () => {});
+    const { getCurrentYear } = dist('utils/schoolYear.js');
+    const cur = Number(getCurrentYear());
+    const past = cur - 1;
+    mygesMock([['/me/years', () => json(200, { result: [past, cur] })]]);
+    const storage = memoryStorage();
+    const page = browser({ storage });
+    await page.settle();
+    await page.signIn('onglet', 'bon');
+    await page.go('notes');
+    await page.byId('annee').fire('change', { target: { value: String(past) } });
+    await page.settle();
+    assert.strictEqual(storage.getItem('annee'), String(past));
+
+    // Rechargement : même onglet, même cookie.
+    const reloaded = browser({ storage, cookie: page.cookieValue() });
+    await reloaded.settle();
+    await reloaded.go('notes');
+    assert.ok(reloaded.requests.includes(`/api/notes?year=${past}`), reloaded.requests.join(' '));
+
+    await reloaded.button('Déconnexion').click();
+    await reloaded.settle();
+    assert.strictEqual(storage.getItem('annee'), null);
 });
