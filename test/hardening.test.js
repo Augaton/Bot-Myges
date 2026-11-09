@@ -24,9 +24,25 @@ test('rendu : un nom de cours démesuré reste rapide', () => {
     const { createCanvas } = require('@napi-rs/canvas');
     ensureFonts();
     const ctx = createCanvas(300, 100).getContext('2d');
-    const started = performance.now();
-    fitText(ctx, 'x'.repeat(5_000), 200, 60, FONT_BOLD, 15, 9);
-    assert.ok(performance.now() - started < 1_000, `${Math.round(performance.now() - started)} ms`);
+    // On compte les mesures plutôt que le temps : le résultat ne dépend pas de la charge
+    // de la machine. Au-delà du plafond, un texte plus long ne doit rien coûter de plus.
+    const measures = (text) => {
+        let count = 0;
+        const counting = new Proxy(ctx, {
+            get(target, key) {
+                if (key === 'measureText') count++;
+                const value = target[key];
+                return typeof value === 'function' ? value.bind(target) : value;
+            },
+            set(target, key, value) {
+                target[key] = value;
+                return true;
+            },
+        });
+        fitText(counting, text, 200, 60, FONT_BOLD, 15, 9);
+        return count;
+    };
+    assert.strictEqual(measures('x'.repeat(5_000)), measures('x'.repeat(200)));
 });
 
 test('rendu : un travail bloqué est refusé, jamais rejoué sur le thread principal', async (t) => {

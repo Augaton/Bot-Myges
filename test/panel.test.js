@@ -153,7 +153,7 @@ test('rôle illisible car MyGes est en panne : pas de session, message de panne'
 });
 
 test('API : rien sans session, même pas avec un cookie inventé', async () => {
-    for (const url of ['/api/session', '/api/home', '/api/agenda', '/api/notes', '/api/absences', '/api/projets', '/api/news', '/api/documents', '/api/documents/42', '/api/documents/42/7', '/api/courses/42/syllabus', '/api/projets/1', '/api/projets/1/depots/2']) {
+    for (const url of ['/api/session', '/api/home', '/api/agenda', '/api/notes', '/api/absences', '/api/projets', '/api/news', '/api/documents', '/api/documents/42', '/api/documents/42/7', '/api/courses/42/syllabus', '/api/projets/1', '/api/projets/1/depots/2', '/api/photos/moi', '/api/photos/8', '/api/annuaire', '/api/profil', '/api/agenda.ics', '/api/evenements', '/api/agenda?month=2026-11']) {
         assert.strictEqual((await call('GET', url)).status, 401, url);
         assert.strictEqual((await call('GET', url, { cookie: '__Host-panel=invente' })).status, 401, url);
     }
@@ -220,6 +220,30 @@ test('requêtes malformées : type, taille et JSON refusés proprement', async (
 test('HEAD sur une page : 200, comme curl -I', async () => {
     assert.strictEqual((await call('HEAD', '/')).status, 200);
     assert.strictEqual((await call('HEAD', '/style.css')).status, 200);
+});
+
+test('application installable : manifeste valide et icônes aux bonnes tailles, sans MyGES dans le nom', async () => {
+    const page = await call('GET', '/');
+    assert.match(page.headers['content-security-policy'], /manifest-src 'self'/);
+    assert.match(page.text, /rel="manifest" href="\/manifest\.webmanifest"/);
+
+    const res = await call('GET', '/manifest.webmanifest');
+    assert.strictEqual(res.status, 200);
+    assert.match(res.headers['content-type'], /^application\/manifest\+json/);
+    const manifest = JSON.parse(res.text);
+    assert.strictEqual(manifest.display, 'standalone');
+    assert.strictEqual(manifest.start_url, '/');
+    assert.doesNotMatch(`${manifest.name} ${manifest.short_name}`, /myges|ges/i);
+    assert.match(manifest.description, /non officiel/);
+
+    const dir = path.join(__dirname, '..', 'assets', 'panel');
+    for (const icon of [...manifest.icons.map((i) => ({ src: i.src, size: Number(i.sizes.split('x')[0]) })), { src: '/apple-touch-icon.png', size: 180 }]) {
+        assert.strictEqual((await call('GET', icon.src)).status, 200, icon.src);
+        const png = fs.readFileSync(path.join(dir, icon.src.slice(1)));
+        assert.strictEqual(png.toString('latin1', 1, 4), 'PNG');
+        assert.strictEqual(png.readUInt32BE(16), icon.size, icon.src);
+        assert.strictEqual(png.readUInt32BE(20), icon.size, icon.src);
+    }
 });
 
 test('fichiers servis : liste fermée, en-têtes stricts', async () => {
@@ -396,11 +420,11 @@ test('projet : ni commentaire interne, ni autre groupe, ni brouillon', () => {
     const detail = views.projectDetail(raw, '1', 7);
     const text = JSON.stringify(detail);
     assert.strictEqual(detail.group.teacherComment, 'visible');
-    assert.deepStrictEqual(detail.group.members, ['Ada L']);
+    assert.deepStrictEqual(detail.group.members, [{ id: '7', name: 'Ada L' }]);
     assert.strictEqual(detail.groupCount, 2);
     assert.deepStrictEqual(detail.activity, []);
     for (const hidden of ['SECRET', 'étranger', '3A']) assert.ok(!text.includes(hidden), hidden);
-    assert.deepStrictEqual(detail.teams.map((t) => [t.name, t.members, t.mine]), [['A', ['Ada L'], true], ['B', ['Bob M'], false]]);
+    assert.deepStrictEqual(detail.teams.map((t) => [t.name, t.members.map((m) => m.name), t.mine]), [['A', ['Ada L'], true], ['B', ['Bob M'], false]]);
     assert.strictEqual(views.projectDetail(raw, '2', 7), null);
     assert.strictEqual(views.projectDetail(raw, '1', 9).group, null);
     assert.strictEqual(views.projectDetail(raw, '1', null).group, null);
@@ -412,6 +436,28 @@ test('vues : événements à venir seulement, du plus proche au plus lointain', 
     const soon = Date.now() + 1_000_000;
     assert.deepStrictEqual(views.eventsView([{ event_title: 'B', event_date: later }, { event_title: 'A', event_date: soon }, { event_title: 'Passé', event_date: 1000 }, null]).map((e) => e.title), ['A', 'B']);
     assert.deepStrictEqual(views.eventsView(null), []);
+});
+
+test('agenda au mois : mois invalide refusé, cours comptés au bon jour de Paris', async () => {
+    const cookie = await signIn('mois-api', [['/agenda', json(200, { result: [] })]]);
+    for (const month of ['2026-13', '2026-00', 'abc', '2026-1']) assert.strictEqual((await call('GET', `/api/agenda?month=${month}`, { cookie })).status, 400, month);
+    assert.strictEqual((await call('GET', '/api/agenda?month=2026-11', { cookie })).status, 200);
+
+    // 23 h 30 UTC le 22 novembre, c'est déjà le 23 à Paris.
+    const late = Date.parse('2026-11-22T23:30:00Z');
+    const days = views.monthDays([
+        { reservation_id: 1, name: 'A', start_date: late, end_date: late + 1000 },
+        { reservation_id: 2, name: 'B', type: 'Examen', start_date: late + 2000, end_date: late + 3000 },
+    ]);
+    assert.deepStrictEqual(days, { '2026-11-23': { count: 2, exam: true } });
+});
+
+test('vues : événements séparés entre à venir et passés', () => {
+    const soon = Date.now() + 1_000_000;
+    const { upcoming, past } = views.allEventsView([{ event_title: 'Bientôt', event_date: soon, is_participant_subscribed: true }, { event_title: 'Ancien', event_date: 1000 }, { event_title: 'Récent', event_date: 2000 }, { event_title: 'Sans date' }]);
+    assert.deepStrictEqual(upcoming.map((e) => e.title), ['Bientôt']);
+    assert.strictEqual(upcoming[0].subscribed, true);
+    assert.deepStrictEqual(past.map((e) => e.title), ['Récent', 'Ancien']);
 });
 
 test('vues : un examen reste identifiable dans l\'agenda', () => {

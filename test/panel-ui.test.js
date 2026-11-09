@@ -412,12 +412,19 @@ test('projets : onglets, page détaillée, seul son groupe y figure, consigne t�
 
     await page.go('projet/1');
     const text = page.text();
-    for (const expected of [/Construire une API/, /prochaine étape/, /Dépôt du code/, /Rendu A/, /Consignes/, /Groupe 5/, /Inès Morel/, /Validé/, /Bon début/, /Mme Durand/, /1 à 4 personnes/, /a déposé un fichier/]) {
+    for (const expected of [/Construire une API/, /prochaine étape/, /Dépôt du code/, /Rendu A/, /Consignes/, /Groupe 5/, /Inès Morel/, /Validé/, /Bon début/, /Mme Durand/, /1 à 4 personnes/, /a déposé un fichier/, /Équipes \(2\)/]) {
         assert.match(text, expected);
     }
-    for (const hidden of [/NOTE INTERNE/, /Rendu autre groupe/, /action étrangère/]) assert.doesNotMatch(text, hidden);
-    assert.match(text, /Groupe 6/); // les équipes sont listées, noms et membres seulement
-    assert.match(text, /Autre Personne/);
+    for (const hidden of [/NOTE INTERNE/, /Rendu autre groupe/, /action étrangère/, /Groupe 6/]) assert.doesNotMatch(text, hidden);
+
+    // Deuxième page du projet : les équipes, noms et membres seulement.
+    await page.go('projet/1/equipes');
+    const teams = page.text();
+    assert.match(teams, /Groupe 6/);
+    assert.match(teams, /Autre Personne/);
+    assert.match(teams, /Mon équipe/);
+    for (const hidden of [/NOTE INTERNE/, /Rendu autre groupe/, /action étrangère/, /Bon début/, /Construire une API/]) assert.doesNotMatch(teams, hidden);
+    await page.go('projet/1');
 
     await page.root.all((e) => e.attrs['aria-label'] === 'Télécharger Consignes')[0].click();
     await page.settle();
@@ -462,7 +469,7 @@ test('équipes : rejoindre passe par une confirmation, puis la page se met à jo
     const page = browser();
     await page.settle();
     await page.signIn('joint', 'bon');
-    await page.go('projet/1');
+    await page.go('projet/1/equipes');
     assert.match(page.text(), /Personne/);
     assert.match(page.text(), /Complet, 2 \/ 2/);
     assert.strictEqual(page.root.all((e) => e.attrs['aria-label'] === 'Rejoindre Groupe 7').length, 0);
@@ -534,6 +541,118 @@ test('panel qui redémarre : la réponse de nginx donne un message clair', async
     assert.match(page.alerts().join(), /Le panel redémarre/);
 });
 
+test('annuaire et profil : listes, recherche, e-mail d\'intervenant, export de l\'agenda', async (t) => {
+    t.mock.method(console, 'log', () => {});
+    mygesMock([
+        ['/me/classes/3/students', () => json(200, { result: [{ uid: 8, firstname: 'Léa', lastname: 'Martin' }, { uid: 9, firstname: 'Tom', lastname: 'Petit' }] })],
+        ['/classes', () => json(200, { result: [{ puid: 3, name: '3A', promotion: 'Promo 2026', school: 'ESGI' }] })],
+        ['/teachers', () => json(200, { result: [{ uid: 20, firstname: 'Marie', lastname: 'Curie', email: 'marie@ecole.test' }] })],
+        ['/me/profile', () => json(200, { result: { firstname: 'Inès', name: 'Morel', email: 'ines@ecole.test' } })],
+    ]);
+    const page = browser();
+    await page.settle();
+    await page.signIn('annuaire', 'bon');
+
+    await page.go('annuaire');
+    assert.match(page.text(), /Ma classe \(2\)/);
+    assert.match(page.text(), /Léa Martin/);
+    const search = page.byId('recherche-annuaire');
+    await search.fire('input', { target: { value: 'petit' } });
+    assert.doesNotMatch(page.text(), /Léa Martin/);
+    await search.fire('input', { target: { value: '' } });
+
+    await page.root.all((e) => e.className === 'tab' && e.textContent.includes('Intervenants'))[0].click();
+    assert.match(page.text(), /Marie Curie/);
+    assert.strictEqual(page.root.all((e) => e.attrs.href === 'mailto:marie@ecole.test').length, 1);
+
+    await page.go('profil');
+    for (const expected of [/Inès Morel/, /ines@ecole\.test/, /3A/, /Promo 2026/, /ESGI/]) assert.match(page.text(), expected);
+
+    await page.go('agenda');
+    await page.button('Télécharger le fichier .ics').click();
+    await page.settle();
+    assert.match(await page.blobs.at(-1).text(), /BEGIN:VCALENDAR/);
+    assert.deepStrictEqual(page.alerts(), []);
+});
+
+test('agenda au mois : cours par jour, jour choisi ouvert en semaine, mois suivant', async (t) => {
+    t.mock.method(console, 'log', () => {});
+    mygesMock([['/agenda', (url) => {
+        const start = Number(new URL(url).searchParams.get('start'));
+        const first = Date.parse('2026-11-23T09:00:00+01:00');
+        return json(200, { result: start <= first && Number(new URL(url).searchParams.get('end')) >= first ? [
+            { reservation_id: 1, name: 'Réseaux', type: 'Cours', start_date: first, end_date: first + H, rooms: [] },
+            { reservation_id: 2, name: 'Partiel', type: 'Examen', start_date: first + 2 * H, end_date: first + 3 * H, rooms: [] },
+        ] : [] });
+    }]]);
+    const page = browser();
+    await page.settle();
+    await page.signIn('mois', 'bon');
+    await page.go('agenda');
+    await page.root.all((e) => e.className === 'tab' && e.textContent === 'Mois')[0].click();
+    await page.settle();
+
+    const day = () => page.root.all((e) => e.attrs['aria-label']?.startsWith('lundi 23 novembre'))[0];
+    let safety = 0;
+    while (!day() && safety++ < 24) {
+        await page.button('Suivant').click();
+        await page.settle();
+    }
+    assert.ok(day(), 'le 23 novembre est affiché');
+    assert.match(day().attrs['aria-label'], /2 cours/);
+    assert.match(day().textContent, /2 cours/);
+    assert.match(day().textContent, /Examen/);
+    assert.match(page.text(), /2 cours ce mois-ci/);
+    assert.strictEqual(page.root.all((e) => e.tag === 'tbody').at(-1).all((e) => e.tag === 'tr').every((row) => row.kids.length === 7), true);
+
+    await day().click();
+    await page.settle();
+    assert.match(page.text(), /Semaine du 23 novembre/);
+    assert.match(page.text(), /Réseaux/);
+});
+
+test('événements : à venir et passés, détail au clic', async (t) => {
+    t.mock.method(console, 'log', () => {});
+    mygesMock([['/me/events', () => json(200, { result: [
+        { event_id: 1, event_title: 'Forum entreprises', event_date: now + 48 * H, location: 'Nation', description: 'Rencontres', end_subscription_date: now + 24 * H, is_participant_subscribed: true },
+        { event_id: 2, event_title: 'Conférence passée', event_date: now - 48 * H },
+    ] })]]);
+    const page = browser();
+    await page.settle();
+    await page.signIn('events', 'bon');
+    await page.go('evenements');
+    assert.match(page.text(), /À venir \(1\)/);
+    assert.match(page.text(), /Passés \(1\)/);
+    assert.match(page.text(), /Forum entreprises/);
+    assert.doesNotMatch(page.text(), /Conférence passée/);
+    await page.root.all((e) => e.className === 'tab' && e.textContent.startsWith('Passés'))[0].click();
+    assert.match(page.text(), /Conférence passée/);
+    await page.root.all((e) => e.className === 'tab' && e.textContent.startsWith('À venir'))[0].click();
+    await page.button('Forum entreprises').click();
+    assert.match(page.root.all((e) => e.tag === 'dialog')[0].textContent, /Rencontres/);
+    assert.match(page.root.all((e) => e.tag === 'dialog')[0].textContent, /Tu es inscrit/);
+});
+
+test('installation : le bouton n\'apparaît que si le navigateur le propose, sinon la marche à suivre', async (t) => {
+    t.mock.method(console, 'log', () => {});
+    mygesMock();
+    const page = browser();
+    await page.settle();
+    await page.signIn('install', 'bon');
+    await page.go('profil');
+    assert.match(page.text(), /Sur ton téléphone/);
+    assert.match(page.text(), /écran d'accueil/);
+    assert.strictEqual(page.root.all((e) => e.tag === 'button' && e.textContent.includes('Installer l\'application')).length, 0);
+
+    let prompted = 0;
+    page.windowListeners.beforeinstallprompt({ preventDefault() {}, prompt: async () => { prompted++; } });
+    await page.go('accueil');
+    await page.go('profil');
+    await page.button('Installer l\'application').click();
+    await page.settle();
+    assert.strictEqual(prompted, 1);
+});
+
 test('accueil : cours suivants, événements et actualités', async (t) => {
     t.mock.method(console, 'log', () => {});
     mygesMock([
@@ -547,6 +666,28 @@ test('accueil : cours suivants, événements et actualités', async (t) => {
     assert.doesNotMatch(page.text(), /Passé/);
     await page.button('Forum entreprises').click();
     assert.match(page.root.all((e) => e.tag === 'dialog')[0].textContent, /Rencontres/);
+});
+
+test('photos : initiales toujours présentes, photo retirée si elle ne charge pas', async (t) => {
+    t.mock.method(console, 'log', () => {});
+    mygesMock([
+        ['/projects', () => json(200, { result: [{ project_id: 1, name: 'P', project_type_group: 'Libre', steps: [], groups: [{ project_group_id: 5, group_name: 'G', project_group_students: [{ u_id: 8, firstname: 'Léa', name: 'Roux' }, { firstname: 'Sans', name: 'Numéro' }] }] }] })],
+        ['/practicals', () => json(200, { result: [] })],
+    ]);
+    const page = browser();
+    await page.settle();
+    await page.signIn('visages', 'bon');
+    assert.ok(page.root.all((e) => e.tag === 'img' && e.attrs.src === '/api/photos/moi').length === 1, 'sa propre photo dans l\'en-tête');
+
+    await page.go('projet/1/equipes');
+    const img = page.root.all((e) => e.tag === 'img' && e.attrs.src === '/api/photos/8')[0];
+    assert.strictEqual(img.attrs.loading, 'lazy');
+    assert.strictEqual(img.attrs.alt, '');
+    assert.match(img.parent.textContent, /LR/);
+    await img.fire('error');
+    assert.strictEqual(page.root.all((e) => e.tag === 'img' && e.attrs.src === '/api/photos/8').length, 0);
+    assert.match(page.text(), /LR/);
+    assert.strictEqual(page.root.all((e) => e.tag === 'img' && /undefined|null/.test(e.attrs.src)).length, 0, 'pas de requête sans identifiant');
 });
 
 test('agenda : une semaine vide garde sa grille', async (t) => {

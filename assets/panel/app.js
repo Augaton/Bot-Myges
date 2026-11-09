@@ -140,7 +140,10 @@ const VIEWS = {
   projets: { label: 'Projets', render: projectsView },
   documents: { label: 'Documents', render: documentsView },
   actualites: { label: 'Actualités', render: newsView },
+  annuaire: { label: 'Annuaire', render: directoryView },
+  evenements: { label: 'Événements', render: eventsScreen },
   projet: { label: 'Projet', render: projectView, parent: 'projets' },
+  profil: { label: 'Mon profil', render: profileView, parent: 'accueil' },
 };
 
 // Sur téléphone, ces écrans sont dans la barre du bas ; les autres, sous « Plus ».
@@ -152,6 +155,8 @@ let plus;
 let links = {};
 let userName = '';
 let renderId = 0;
+// Chrome et Edge proposent l'installation par cet évènement, à garder pour un clic de l'utilisateur.
+let installPrompt = null;
 let currentView = '';
 const scrolls = {};
 
@@ -168,7 +173,7 @@ function showShell(name) {
       const dx = end.clientX - (touch?.clientX ?? end.clientX);
       const dy = end.clientY - (touch?.clientY ?? end.clientY);
       // Un geste nettement horizontal : ne pas gêner le défilement de la page.
-      if (currentView === 'agenda' && Math.abs(dx) > 70 && Math.abs(dx) > 2 * Math.abs(dy)) stepWeek(dx < 0 ? 7 : -7);
+      if (currentView === 'agenda' && Math.abs(dx) > 70 && Math.abs(dx) > 2 * Math.abs(dy)) stepAgenda(dx < 0 ? 1 : -1);
     },
   });
   links = Object.fromEntries(Object.entries(VIEWS).filter(([, view]) => !view.parent).map(([id, view]) => [id, h('a', { href: `#${id}` }, view.label)]));
@@ -190,7 +195,7 @@ function showShell(name) {
 
   root.replaceChildren(h('div', { class: 'shell' },
     h('div', { class: 'side' },
-      h('header', { class: 'top' }, h('span', { class: 'brand' }, 'Panel étudiant'), h('span', { class: 'who' }, name)),
+      h('header', { class: 'top' }, h('span', { class: 'brand' }, 'Panel étudiant'), h('a', { class: 'who', href: '#profil', 'aria-label': `Mon profil, ${name}` }, avatar({ id: 'moi', name }), h('span', {}, name))),
       h('nav', { 'aria-label': 'Navigation' },
         PRIMARY.map((id) => links[id]),
         plus,
@@ -201,10 +206,22 @@ function showShell(name) {
   render();
 }
 
+/**
+ * Pastille d'une personne : ses initiales, recouvertes par sa photo si elle se charge.
+ * Le nom est toujours écrit à côté : l'image n'apporte rien aux lecteurs d'écran.
+ */
+function avatar(person) {
+  const initials = person.name.split(/\s+/).filter(Boolean).slice(0, 2).map((word) => word[0]).join('').toUpperCase();
+  const photo = person.id && h('img', { src: `/api/photos/${person.id}`, alt: '', loading: 'lazy', decoding: 'async', onerror: () => photo.remove() });
+  return h('span', { class: 'avatar', 'aria-hidden': 'true' }, initials, photo);
+}
+
+const peopleList = (members) => h('ul', { class: 'people' }, members.map((person) => h('li', {}, avatar(person), h('span', {}, person.name))));
+
 const skeleton = () => h('div', { class: 'skeleton', 'aria-label': 'Chargement' }, h('div'), h('div'), h('div'));
 
 async function render() {
-  const [route, param] = location.hash.slice(1).split('/');
+  const [route, param, tab] = location.hash.slice(1).split('/');
   const id = VIEWS[route] ? route : 'accueil';
   const active = VIEWS[id].parent ?? id;
   const current = ++renderId;
@@ -225,7 +242,7 @@ async function render() {
     if (current === renderId) main.replaceChildren(title, skeleton());
   }, SKELETON_DELAY_MS);
   try {
-    const content = await VIEWS[id].render(title, param);
+    const content = await VIEWS[id].render(title, param, tab);
     if (current !== renderId) return; // l'étudiant a changé de page entre-temps
     clearTimeout(waiting);
     main.replaceChildren(title, ...[content].flat().filter(Boolean));
@@ -377,16 +394,49 @@ function projectCard(p) {
 /** Lignes d'un bloc de l'accueil ; un bloc en panne le dit au lieu de disparaître. */
 const homeBlock = (title, items, row, emptyText, link) => section(title,
   !items ? unavailable() : items.length ? h('ul', { class: 'rows' }, items.map(row)) : empty(emptyText),
-  items?.length > 0 && link);
+  items && link);
 
 function showEvent(event) {
+  const open = event.subscribeUntil && event.subscribeUntil >= Date.now();
   showDialog(event.title, facts([
     ['Date', day(event.date)],
     ['Heure', time(event.date)],
     ['Lieu', event.location],
     ['Type', event.type],
     ['Organisateur', event.organizer],
+    ['Inscription', event.subscribed ? 'Tu es inscrit' : open ? `Sur MyGES, jusqu'au ${shortFormat.format(event.subscribeUntil)}` : ''],
   ]), event.description && h('p', { class: 'body-text' }, event.description));
+}
+
+const eventRow = (event) => h('li', {}, h('button', { type: 'button', class: 'course', onclick: () => showEvent(event) },
+  h('span', { class: 'grow' },
+    h('span', { class: 'line name' }, event.title),
+    event.location && h('span', { class: 'line muted small' }, event.location),
+    event.subscribed && h('span', { class: 'line small ok' }, 'Tu es inscrit')),
+  h('span', { class: 'end small' }, h('span', { class: 'line' }, shortFormat.format(event.date)), h('span', { class: 'line muted' }, time(event.date)))));
+
+let eventTab = 'avenir';
+
+async function eventsScreen() {
+  const { upcoming, past } = await load('/api/evenements');
+  if (!upcoming.length && !past.length) return empty('Aucun événement pour le moment.');
+  const list = h('div', { class: 'stack' });
+  const show = () => {
+    const events = eventTab === 'avenir' ? upcoming : past;
+    const months = new Map();
+    for (const event of events) {
+      const key = capitalize(monthFormat.format(event.date));
+      months.set(key, [...(months.get(key) ?? []), event]);
+    }
+    list.replaceChildren(...(events.length
+      ? [...months].map(([month, items]) => h('section', { class: 'stack' }, h('h3', { class: 'day-title' }, `${month} (${items.length})`), h('ul', { class: 'rows' }, items.map(eventRow))))
+      : [empty(eventTab === 'avenir' ? 'Aucun événement à venir.' : 'Aucun événement passé.')]));
+  };
+  show();
+  return [
+    filterChips('Filtrer les événements', [['avenir', `À venir (${upcoming.length})`], ['passes', `Passés (${past.length})`]], eventTab, (id) => { eventTab = id; show(); }),
+    list,
+  ];
 }
 
 async function homeView(title) {
@@ -419,7 +469,7 @@ async function homeView(title) {
   ].filter(Boolean);
 
   const days = new Map();
-  for (const c of courses?.slice(next?.start <= now ? 1 : 1, 7) ?? []) {
+  for (const c of courses?.slice(1, 7) ?? []) {
     const key = isoFormat.format(c.start);
     days.set(key, [...(days.get(key) ?? []), c]);
   }
@@ -436,9 +486,7 @@ async function homeView(title) {
             h('ul', { class: 'rows' }, list.map((c) => courseRow(c, now)))))),
         homeBlock('À rendre', data.deadlines?.slice(0, 3), deadlineRow, 'Rien à rendre pour le moment.', h('a', { href: '#projets', class: 'small' }, 'Tous les projets'))),
       h('div', { class: 'column' },
-        homeBlock('Événements', data.events, (event) => h('li', {}, h('button', { type: 'button', class: 'course', onclick: () => showEvent(event) },
-          h('span', { class: 'grow' }, h('span', { class: 'line name' }, event.title), event.location && h('span', { class: 'line muted small' }, event.location)),
-          h('span', { class: 'end small' }, shortFormat.format(event.date)))), 'Aucun événement à venir.'),
+        homeBlock('Événements', data.events, eventRow, 'Aucun événement à venir.', h('a', { href: '#evenements', class: 'small' }, 'Tous les événements')),
         homeBlock('Actualités', data.news, (n) => h('li', {}, h('a', { class: 'course', href: '#actualites' },
           h('span', { class: 'grow' }, h('span', { class: 'line name' }, n.title), n.date && h('span', { class: 'line muted small' }, dateFormat.format(n.date))))), 'Aucune actualité.', h('a', { href: '#actualites', class: 'small' }, 'Toutes les actualités')))),
   ];
@@ -458,7 +506,103 @@ function goToWeek(week) {
 
 const stepWeek = (days) => goToWeek(weekAt(days));
 
+let agendaMode = 'semaine';
+let agendaMonth = '';
+
+function shiftMonth(month, delta) {
+  const [year, index] = month.split('-').map(Number);
+  const date = new Date(Date.UTC(year, index - 1 + delta, 1));
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+function goToMonth(month) {
+  agendaMonth = month;
+  scrolls.agenda = 0;
+  render();
+}
+
+function stepAgenda(direction) {
+  if (agendaMode === 'mois') goToMonth(shiftMonth(agendaMonth, direction));
+  else stepWeek(7 * direction);
+}
+
+/** Calculs en UTC : un mois de calendrier ne dépend ni du fuseau ni du changement d'heure. */
+const monthTitle = new Intl.DateTimeFormat('fr-FR', { timeZone: 'UTC', month: 'long', year: 'numeric' });
+const dayTitle = new Intl.DateTimeFormat('fr-FR', { timeZone: 'UTC', weekday: 'long', day: 'numeric', month: 'long' });
+const WEEKDAYS = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
+
+async function monthView() {
+  const month = agendaMonth || isoFormat.format(Date.now()).slice(0, 7);
+  agendaMonth = month;
+  const data = await load(`/api/agenda?month=${month}`);
+  const [year, index] = month.split('-').map(Number);
+  const first = new Date(Date.UTC(year, index - 1, 1));
+  const total = new Date(Date.UTC(year, index, 0)).getUTCDate();
+  const offset = (first.getUTCDay() + 6) % 7;
+  const today = isoFormat.format(Date.now());
+  const count = Object.values(data.days).reduce((sum, day) => sum + day.count, 0);
+
+  const cell = (number) => {
+    const key = `${month}-${String(number).padStart(2, '0')}`;
+    const info = data.days[key];
+    const label = `${dayTitle.format(new Date(Date.UTC(year, index - 1, number)))}, ${info ? `${info.count} cours` : 'aucun cours'}`;
+    return h('td', {}, h('button', {
+      type: 'button',
+      class: `day${info ? ' has-courses' : ''}${key === today ? ' today' : ''}`,
+      'aria-label': label,
+      onclick: () => {
+        agendaMode = 'semaine';
+        goToWeek(key);
+      },
+    },
+    h('span', { class: 'day-number' }, String(number)),
+    info && h('span', { class: 'day-count' }, `${info.count} cours`),
+    info?.exam && h('span', { class: 'day-exam' }, 'Examen')));
+  };
+
+  const cells = [...Array.from({ length: offset }, () => h('td', {})), ...Array.from({ length: total }, (_, i) => cell(i + 1))];
+  while (cells.length % 7) cells.push(h('td', {}));
+  const rows = [];
+  for (let i = 0; i < cells.length; i += 7) rows.push(h('tr', {}, cells.slice(i, i + 7)));
+
+  return [
+    section(capitalize(monthTitle.format(first)),
+      h('div', { class: 'toolbar' },
+        h('button', { type: 'button', onclick: () => goToMonth(shiftMonth(month, -1)) }, 'Précédent'),
+        h('button', { type: 'button', onclick: () => goToMonth(isoFormat.format(Date.now()).slice(0, 7)) }, 'Ce mois-ci'),
+        h('button', { type: 'button', onclick: () => goToMonth(shiftMonth(month, 1)) }, 'Suivant'))),
+    h('p', { class: 'muted' }, count ? `${count} cours ce mois-ci. Choisis un jour pour voir sa semaine.` : 'Aucun cours ce mois-ci.'),
+    !count && data.next && h('div', { class: 'toolbar' }, h('button', { type: 'button', onclick: () => goToMonth(isoFormat.format(data.next).slice(0, 7)) }, `Prochain cours : ${shortFormat.format(data.next)}`)),
+    h('table', { class: 'month' },
+      h('thead', {}, h('tr', {}, WEEKDAYS.map((name) => h('th', { scope: 'col' }, name)))),
+      h('tbody', {}, rows)),
+  ];
+}
+
+/** Export vers le calendrier du téléphone ou de Google Agenda. */
+function agendaExport() {
+  const zone = h('section', { class: 'stack' });
+  const button = h('button', { type: 'button', onclick: () => downloadFile('/api/agenda.ics', 'emploi-du-temps.ics', button, zone) }, 'Télécharger le fichier .ics');
+  zone.append(
+    h('h2', {}, 'Dans ton calendrier'),
+    h('p', { class: 'muted small body-text' }, 'Les 12 prochaines semaines, à importer dans Google Agenda ou le calendrier de ton téléphone. C\'est une copie : réimporte-la si ton agenda change.'),
+    h('div', { class: 'toolbar' }, button));
+  return zone;
+}
+
 async function agendaView() {
+  const switcher = filterChips('Affichage de l\'agenda', [['semaine', 'Semaine'], ['mois', 'Mois']], agendaMode, (id) => {
+    agendaMode = id;
+    // Le mois suit la semaine affichée : on ne perd pas sa place en changeant de vue.
+    if (id === 'mois' && agendaStart) agendaMonth = isoFormat.format(agendaStart + DAY / 2).slice(0, 7);
+    scrolls.agenda = 0;
+    render();
+  });
+  const content = agendaMode === 'mois' ? await monthView() : await weekView();
+  return [switcher, ...content, agendaExport()];
+}
+
+async function weekView() {
   const data = await load(`/api/agenda${agendaWeek ? `?week=${agendaWeek}` : ''}`);
   agendaStart = data.start;
   load(`/api/agenda?week=${weekAt(7)}`).catch(() => {}); // la semaine suivante sera immédiate
@@ -799,13 +943,16 @@ function confirmAction(title, text, label, run) {
   body.append(error, accept);
 }
 
-function teamsSection(p) {
+let teamFilter = 'toutes';
+
+/** Page « Équipes » d'un projet : qui est où, et où il reste de la place. */
+function teamsPage(p) {
   const change = async (team, action) => {
     await post(`/api/projets/${p.id}/equipes/${team.id}/${action}`);
     cache.clear(); // projets, accueil : tout ce qui citait l'ancienne équipe
     render();
   };
-  const row = (team) => {
+  const card = (team) => {
     const size = p.groupSize.max ? `${team.members.length} / ${p.groupSize.max}` : String(team.members.length);
     const action = team.mine
       ? p.canLeave && h('button', {
@@ -818,44 +965,47 @@ function teamsSection(p) {
         'aria-label': `Rejoindre ${team.name}`,
         onclick: () => confirmAction(`Rejoindre ${team.name} ?`, 'Tu rejoindras vraiment cette équipe sur MyGES, et l\'action apparaîtra dans son journal.', 'Rejoindre l\'équipe', () => change(team, 'rejoindre')),
       }, 'Rejoindre');
-    return h('li', {},
-      h('div', { class: 'grow' },
-        h('div', { class: 'name' }, team.name, team.mine && ' ', team.mine && h('span', { class: 'tag' }, 'Mon équipe')),
-        h('div', { class: 'small' }, team.members.join(', ') || 'Aucun membre')),
-      h('div', { class: 'end team-side' }, h('span', { class: 'small muted num' }, team.full ? `Complet, ${size}` : size), action));
+    return h('li', { class: `team-card${team.mine ? ' mine' : ''}` },
+      h('div', { class: 'card-top' },
+        h('span', { class: 'name' }, team.name),
+        h('span', { class: 'small muted num' }, team.full ? `Complet, ${size}` : size)),
+      team.mine && h('span', { class: 'small' }, 'Mon équipe'),
+      team.members.length ? peopleList(team.members) : h('p', { class: 'muted small' }, 'Aucun membre'),
+      action && h('div', { class: 'team-action' }, action));
   };
 
-  const list = h('ul', { class: 'rows' });
-  const show = (query = '') => {
+  const list = h('div', { class: 'stack' });
+  let query = '';
+  const show = () => {
     const needle = query.trim().toLocaleLowerCase('fr');
-    const found = p.teams.filter((team) => `${team.name} ${team.members.join(' ')}`.toLocaleLowerCase('fr').includes(needle));
-    list.replaceChildren(...found.map(row));
-    if (!found.length) list.replaceChildren(h('li', { class: 'muted' }, 'Aucune équipe ne correspond.'));
+    const found = p.teams.filter((team) => (teamFilter === 'toutes' || !team.full)
+      && `${team.name} ${team.members.map((m) => m.name).join(' ')}`.toLocaleLowerCase('fr').includes(needle));
+    list.replaceChildren(found.length ? h('ul', { class: 'team-grid' }, found.map(card)) : empty('Aucune équipe ne correspond.'));
   };
   show();
-  const search = h('input', { id: 'recherche-equipe', type: 'search', oninput: (e) => show(e.target.value) });
-  return h('details', { open: p.canJoin },
-    h('summary', {}, `Équipes (${p.teams.length})`),
-    h('div', { class: 'stack' },
-      p.teams.length > 5 && h('div', {}, h('label', { for: 'recherche-equipe' }, 'Chercher une équipe ou un étudiant'), search),
-      list));
+  const hasSpace = p.teams.some((team) => !team.full);
+  return h('div', { class: 'stack' },
+    p.canJoin && h('p', { class: 'muted small' }, 'Tu n\'as pas encore d\'équipe : choisis-en une qui a de la place.'),
+    h('div', { class: 'team-tools' },
+      p.teams.length > 5 && h('div', { class: 'narrow-field' }, h('label', { for: 'recherche-equipe' }, 'Chercher une équipe ou un étudiant'),
+        h('input', { id: 'recherche-equipe', type: 'search', oninput: (e) => { query = e.target.value; show(); } })),
+      hasSpace && p.groupSize.max && filterChips('Filtrer les équipes', [['toutes', 'Toutes'], ['libres', 'Avec de la place']], teamFilter, (id) => { teamFilter = id; show(); })),
+    list);
 }
 
-async function projectView(title, id) {
-  const p = await load(`/api/projets/${encodeURIComponent(id ?? '')}`);
-  title.textContent = p.name;
+/** Page « Informations » d'un projet. */
+function projectInfoPage(p) {
   const zone = h('div', { class: 'column' });
-  const fileButton = (kind, file) => {
+  const fileRow = (kind, file) => {
     const button = h('button', {
       type: 'button',
       'aria-label': `Télécharger ${file.title}`,
       onclick: () => downloadFile(`/api/projets/${p.id}/${kind}/${file.id}`, file.fileName, button, zone),
     }, 'Télécharger');
-    return button;
+    return h('li', {},
+      h('div', { class: 'grow' }, h('div', { class: 'name' }, file.title), file.date && h('div', { class: 'muted small' }, dateFormat.format(file.date))),
+      button);
   };
-  const fileRow = (kind, file) => h('li', {},
-    h('div', { class: 'grow' }, h('div', { class: 'name' }, file.title), file.date && h('div', { class: 'muted small' }, dateFormat.format(file.date))),
-    fileButton(kind, file));
 
   const nextDate = p.steps.find((step) => step.date >= Date.now())?.date;
   const timeline = h('ol', { class: 'timeline' }, p.steps.map((step) => {
@@ -872,45 +1022,125 @@ async function projectView(title, id) {
   const size = p.groupSize.min && p.groupSize.max
     ? (p.groupSize.min === p.groupSize.max ? plural(p.groupSize.min, 'personne') : `${p.groupSize.min} à ${p.groupSize.max} personnes`)
     : '';
+  const teamsLink = h('a', { href: `#projet/${p.id}/equipes`, class: 'small' }, 'Voir toutes les équipes');
   const group = p.group
     ? section('Mon groupe',
+      peopleList(p.group.members),
       facts([
         ['Nom', p.group.name],
-        ['Membres', p.group.members.join(', ')],
         ['Sujet', p.group.subjectValidated ? 'Validé' : 'Pas encore validé'],
         ['Soutenance', p.group.presentation && dateFormat.format(p.group.presentation)],
       ]),
-      p.group.teacherComment && section('Commentaire de l\'enseignant', h('p', { class: 'body-text' }, p.group.teacherComment)))
-    : section('Mon groupe', h('p', { class: 'danger' }, 'Tu n\'es dans aucun groupe pour ce projet.'), p.canJoin && h('p', { class: 'muted small' }, 'Choisis une équipe dans la liste.'));
+      p.group.teacherComment && section('Commentaire de l\'enseignant', h('p', { class: 'body-text' }, p.group.teacherComment)),
+      teamsLink)
+    : section('Mon groupe', h('p', { class: 'danger' }, 'Tu n\'es dans aucun groupe pour ce projet.'), teamsLink);
 
   zone.append(...[
-    p.teams.length > 0 && teamsSection(p),
     p.goal && section('Objectif', h('p', { class: 'body-text' }, p.goal)),
     p.plan && section('Programme', h('p', { class: 'body-text' }, p.plan)),
     section('Étapes', p.steps.length ? timeline : empty('Aucune étape annoncée.')),
     p.files.length > 0 && section('Fichiers du projet', h('ul', { class: 'rows' }, p.files.map((file) => fileRow('consignes', file)))),
   ].filter(Boolean));
 
+  return h('div', { class: 'project-page' },
+    zone,
+    h('div', { class: 'column' },
+      section('Informations', facts([
+        ['Matière', p.course],
+        ['Nature', p.practical ? 'Travail pratique' : 'Projet'],
+        ['Enseignant', p.teacher],
+        ['Sujet', p.subjectType],
+        ['Groupes', p.groupType],
+        ['Taille', size],
+        ['Outils', p.tools],
+        ['Bibliographie', p.books],
+      ])),
+      group,
+      p.activity.length > 0 && h('details', {}, h('summary', {}, `Activité du groupe (${p.activity.length})`),
+        h('ul', { class: 'activity' }, p.activity.map((event) => h('li', {},
+          h('span', { class: 'small' }, [event.author, event.text].filter(Boolean).join(' ')),
+          event.date && h('span', { class: 'muted small line' }, dateFormat.format(event.date))))))));
+}
+
+async function projectView(title, id, tab) {
+  const p = await load(`/api/projets/${encodeURIComponent(id ?? '')}`);
+  title.textContent = p.name;
+  const onTeams = tab === 'equipes';
+  const link = (label, suffix, current) => h('a', { href: `#projet/${p.id}${suffix}`, class: 'tab', 'aria-current': current ? 'page' : null }, label);
   return [
     h('a', { href: '#projets', class: 'small' }, 'Tous les projets'),
-    h('div', { class: 'project-page' },
-      zone,
-      h('div', { class: 'column' },
-        section('Informations', facts([
-          ['Matière', p.course],
-          ['Nature', p.practical ? 'Travail pratique' : 'Projet'],
-          ['Enseignant', p.teacher],
-          ['Sujet', p.subjectType],
-          ['Groupes', p.groupType],
-          ['Taille', size],
-          ['Outils', p.tools],
-          ['Bibliographie', p.books],
-        ])),
-        group,
-        p.activity.length > 0 && h('details', {}, h('summary', {}, `Activité du groupe (${p.activity.length})`),
-          h('ul', { class: 'activity' }, p.activity.map((event) => h('li', {},
-            h('span', { class: 'small' }, [event.author, event.text].filter(Boolean).join(' ')),
-            event.date && h('span', { class: 'muted small line' }, dateFormat.format(event.date)))))))),
+    h('div', { class: 'chips', role: 'navigation', 'aria-label': 'Pages du projet' },
+      link('Informations', '', !onTeams),
+      link(`Équipes (${p.teams.length})`, '/equipes', onTeams)),
+    onTeams ? teamsPage(p) : projectInfoPage(p),
+  ];
+}
+
+let directoryTab = 'classe';
+
+async function directoryView() {
+  const { classmates, teachers } = await load('/api/annuaire');
+  if (!classmates.length && !teachers.length) return empty('Annuaire indisponible pour le moment.');
+  if (directoryTab === 'classe' && !classmates.length) directoryTab = 'intervenants';
+
+  let query = '';
+  const list = h('ul', { class: 'directory' });
+  const card = (person) => h('li', {},
+    avatar(person),
+    h('span', { class: 'directory-text' },
+      h('span', { class: 'line name' }, person.name),
+      /^[^\s@]+@[^\s@]+$/.test(person.email ?? '') && h('a', { class: 'small', href: `mailto:${encodeURI(person.email)}` }, person.email)));
+  const show = () => {
+    const needle = query.trim().toLocaleLowerCase('fr');
+    const pool = directoryTab === 'classe' ? classmates : teachers;
+    const found = pool.filter((person) => person.name.toLocaleLowerCase('fr').includes(needle));
+    list.replaceChildren(...(found.length ? found.map(card) : [h('li', { class: 'muted' }, 'Personne ne correspond.')]));
+  };
+  show();
+  const search = h('input', { id: 'recherche-annuaire', type: 'search', oninput: (e) => { query = e.target.value; show(); } });
+  return [
+    h('div', { class: 'filters' },
+      filterChips('Choisir une liste', [['classe', `Ma classe (${classmates.length})`], ['intervenants', `Intervenants (${teachers.length})`]], directoryTab, (id) => { directoryTab = id; show(); }),
+      h('div', { class: 'narrow-field' }, h('label', { for: 'recherche-annuaire' }, 'Chercher une personne'), search)),
+    list,
+  ];
+}
+
+/** Installer le panel sur son téléphone. Rien n'est gardé hors ligne : il faut être connecté. */
+function installSection() {
+  if (window.matchMedia?.('(display-mode: standalone)').matches) return null;
+  const zone = h('section', { class: 'stack' }, h('h2', {}, 'Sur ton téléphone'));
+  if (installPrompt) {
+    const button = h('button', {
+      type: 'button',
+      onclick: async () => {
+        const prompt = installPrompt;
+        installPrompt = null;
+        await prompt.prompt();
+        button.remove();
+      },
+    }, 'Installer l\'application');
+    zone.append(h('p', { class: 'muted small body-text' }, 'Le panel s\'ouvre alors comme une application, depuis ton écran d\'accueil.'), h('div', { class: 'toolbar' }, button));
+  } else {
+    zone.append(h('p', { class: 'muted small body-text' }, 'Ajoute le panel à ton écran d\'accueil : sur iPhone, bouton Partager puis « Sur l\'écran d\'accueil » ; sur Android, menu du navigateur puis « Installer l\'application ».'));
+  }
+  return zone;
+}
+
+async function profileView(title) {
+  const p = await load('/api/profil');
+  title.textContent = p.name;
+  const unique = (key) => [...new Set(p.classes.map((c) => c[key]).filter(Boolean))].join(', ');
+  return [
+    h('div', { class: 'profile' },
+      avatar({ id: 'moi', name: p.name }),
+      facts([
+        ['E-mail', p.email],
+        ['Classe', unique('name')],
+        ['Promotion', unique('promotion')],
+        ['École', unique('school')],
+      ])),
+    installSection(),
   ];
 }
 
@@ -1029,11 +1259,16 @@ window.addEventListener('hashchange', () => {
   if (main?.isConnected) render();
 });
 
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  installPrompt = e;
+});
+
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') setMenu(false);
   if (!main?.isConnected || currentView !== 'agenda' || ['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target?.tagName)) return;
-  if (e.key === 'ArrowLeft') stepWeek(-7);
-  if (e.key === 'ArrowRight') stepWeek(7);
+  if (e.key === 'ArrowLeft') stepAgenda(-1);
+  if (e.key === 'ArrowRight') stepAgenda(1);
 });
 
 api('/api/session').then(({ name }) => showShell(name), (e) => {

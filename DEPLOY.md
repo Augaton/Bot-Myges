@@ -55,7 +55,7 @@ d'`index.js`, ou systemd ci-dessous.
 | `OWNER_IDS` | non | ID(s) Discord du/des propriétaire(s), séparés par des virgules. Peuvent utiliser `/config` sur tout serveur, même sans être admin. Absent ou vide : aucun propriétaire. |
 | `DB_FILE` | non | Fichier de persistance (défaut : `<racine>/saved_data.json`). |
 | `CAMPUS_FILE` | non | Codes d'accès des campus (défaut : `<racine>/campus.json`). |
-| `PANEL_PUBLIC_URL` | non | Adresse `https://` du panel, affichée dans l'annonce de mise à jour. Absente : l'annonce ne donne pas de lien. |
+| `PANEL_PUBLIC_URL` | non | Adresse `https://` du panel, donnée par `/panel` et l'annonce de mise à jour. Absente : `/panel` dit que le panel n'est pas disponible, et l'annonce ne donne pas de lien. |
 
 Le `.env` est lu nativement par Node depuis la **racine du projet** (plus de
 dépendance `dotenv`) ; une variable déjà définie dans l'environnement est prioritaire.

@@ -67,3 +67,9 @@ export function isBotOwner(userId: string): boolean {
 }
 
 export { getCurrentYear } from './utils/schoolYear';
+
+/** Adresse publique du panel, pour /panel et l'annonce. Jamais de lien en HTTP simple. */
+export function panelPublicUrl(): string {
+    const url = process.env.PANEL_PUBLIC_URL ?? '';
+    return url.startsWith('https://') ? url : '';
+}

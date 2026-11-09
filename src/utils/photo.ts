@@ -54,3 +54,15 @@ export async function fetchPhotoBuffer(
 
     return remember(buffer);
 }
+
+/**
+ * Type réel d'une image d'après ses premiers octets, ou null si ce n'en est pas une.
+ * Le panel ne relaie rien d'autre : ni page HTML, ni SVG, qui peut contenir du script.
+ */
+export function imageType(data: Buffer): string | null {
+    if (data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) return 'image/jpeg';
+    if (data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png';
+    if (data.subarray(0, 4).toString('latin1') === 'RIFF' && data.subarray(8, 12).toString('latin1') === 'WEBP') return 'image/webp';
+    if (data.subarray(0, 4).toString('latin1') === 'GIF8') return 'image/gif';
+    return null;
+}

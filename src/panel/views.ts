@@ -129,13 +129,32 @@ export function projectsView(raw: any, uid: number | null = null) {
     return items.sort((a, b) => (a.date ?? Infinity) - (b.date ?? Infinity) || b.last - a.last);
 }
 
+/** Une personne d'une équipe : son nom, et de quoi demander sa photo. Rien d'autre. */
+function personView(student: any) {
+    return { id: student?.u_id == null ? '' : String(student.u_id), name: fullName({ firstname: student?.firstname, lastname: student?.name }) };
+}
+
+/** Membres des équipes des projets de l'étudiant, brouillons exclus : ceux dont il peut voir la photo. */
+export function teamMemberIds(raw: any): Set<number> {
+    const ids = new Set<number>();
+    for (const p of list(raw)) {
+        if (p?.is_draft) continue;
+        for (const g of list(p?.groups)) {
+            for (const s of list(g?.project_group_students)) {
+                if (s?.u_id != null) ids.add(Number(s.u_id));
+            }
+        }
+    }
+    return ids;
+}
+
 /** Les équipes du projet : noms et effectifs seulement, pour choisir la sienne. */
 function teamsOf(project: any, mine: any) {
     const max = Number(project?.project_max_student_group) || null;
     return list(project?.groups)
         .filter((g) => g?.project_group_id != null)
         .map((g) => {
-            const members = list(g?.project_group_students).map((s) => fullName({ firstname: s?.firstname, lastname: s?.name }));
+            const members = list(g?.project_group_students).map(personView);
             return { id: String(g.project_group_id), name: String(g?.group_name ?? ''), members, mine: g === mine, full: max !== null && members.length >= max };
         })
         .sort((a, b) => Number(b.mine) - Number(a.mine) || collator.compare(a.name, b.name));
@@ -187,7 +206,7 @@ export function projectDetail(raw: any, id: string, uid: number | null) {
             subjectValidated: !!group?.subject_validated,
             presentation: Number(group?.date_presentation) || null,
             teacherComment: snippet(group?.teacher_comment, 2_000),
-            members: list(group?.project_group_students).map((s) => fullName({ firstname: s?.firstname, lastname: s?.name })),
+            members: list(group?.project_group_students).map(personView),
         },
         activity: list(p?.project_group_logs)
             .filter((l) => groupId !== null && Number(l?.pgr_id) === groupId)
@@ -197,20 +216,64 @@ export function projectDetail(raw: any, id: string, uid: number | null) {
     };
 }
 
+/** Annuaire : des noms, et l'adresse e-mail des seuls intervenants. Aucune adresse de photo. */
+export function directoryView(classmates: any[], teachers: any[]) {
+    const byName = (a: any, b: any) => collator.compare(a.lastname, b.lastname) || collator.compare(a.firstname, b.firstname);
+    const name = (person: any) => fullName({ firstname: person.firstname, lastname: person.lastname });
+    return {
+        classmates: [...list(classmates)].sort(byName).map((person) => ({ id: person.id, name: name(person) })),
+        teachers: [...list(teachers)].sort(byName).map((person) => ({ id: person.id, name: name(person), email: person.email })),
+    };
+}
+
+/** Profil affiché : ni adresse postale, ni INE, ni date de naissance, ni contact d'urgence. */
+export function profileView(profile: any, classes: any) {
+    return {
+        name: fullName({ firstname: profile?.firstname, lastname: profile?.name }),
+        email: String(profile?.email ?? ''),
+        classes: list(classes).map((c) => ({ name: String(c?.name ?? ''), promotion: String(c?.promotion ?? ''), school: String(c?.school ?? '') })),
+    };
+}
+
+function eventView(e: any) {
+    return {
+        title: snippet(String(e?.event_title || 'Événement'), 160),
+        date: Number(e?.event_date),
+        type: String(e?.event_type ?? ''),
+        location: snippet(String(e?.location ?? ''), 160),
+        organizer: snippet(String(e?.organizer ?? ''), 160),
+        description: snippet(String(e?.description ?? ''), 2_000),
+        subscribed: e?.is_participant_subscribed === true,
+        subscribeUntil: Number(e?.end_subscription_date) || null,
+    };
+}
+
 /** Événements à venir, du plus proche au plus lointain. */
 export function eventsView(raw: any) {
+    return allEventsView(raw).upcoming;
+}
+
+/** Tous les événements : à venir, puis passés du plus récent au plus ancien. */
+export function allEventsView(raw: any) {
     const now = Date.now();
-    return list(raw)
-        .map((e) => ({
-            title: snippet(String(e?.event_title || 'Événement'), 160),
-            date: Number(e?.event_date),
-            type: String(e?.event_type ?? ''),
-            location: snippet(String(e?.location ?? ''), 160),
-            organizer: snippet(String(e?.organizer ?? ''), 160),
-            description: snippet(String(e?.description ?? ''), 2_000),
-        }))
-        .filter((e) => Number.isFinite(e.date) && e.date >= now)
-        .sort((a, b) => a.date - b.date);
+    const events = list(raw).map(eventView).filter((e) => Number.isFinite(e.date));
+    return {
+        upcoming: events.filter((e) => e.date >= now).sort((a, b) => a.date - b.date),
+        past: events.filter((e) => e.date < now).sort((a, b) => b.date - a.date),
+    };
+}
+
+/** Nombre de cours par jour (AAAA-MM-JJ, heure de l'école), et s'il y a un examen. */
+export function monthDays(raw: any) {
+    const days: Record<string, { count: number; exam: boolean }> = {};
+    for (const course of coursesView(raw)) {
+        const d = new Date(course.start);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        const day = (days[key] ??= { count: 0, exam: false });
+        day.count++;
+        if (course.type === 'Examen') day.exam = true;
+    }
+    return days;
 }
 
 /** Ce que le syllabus apporte à l'étudiant, en texte brut. Null si la matière n'en a pas. */

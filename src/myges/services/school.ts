@@ -19,6 +19,11 @@ export class SchoolService extends BaseService {
     return this.get(credentials, `/me/${year}/classes`);
   }
 
+  /** Fiche d'un étudiant. MyGes accepte n'importe quel identifiant : à n'appeler que pour un proche vérifié. */
+  static getStudent(credentials: GesAuthenticationToken, id: number) {
+    return this.get(credentials, `/me/students/${id}`);
+  }
+
   static getClassmates(credentials: GesAuthenticationToken, classId: number) {
     return this.get(credentials, `/me/classes/${classId}/students`);
   }

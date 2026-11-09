@@ -6,7 +6,7 @@ import * as https from 'node:https';
 import * as net from 'node:net';
 import * as path from 'node:path';
 import {
-    forgetAssignments, getAbsences, getAssignments, getCourses, getEvents, getGrades, getNews, getProfile, getSyllabus, getTimetable,
+    forgetAssignments, getAbsences, getAssignments, getClasses, getClassmatePhotos, getClassmates, getCourses, getEvents, getGrades, getNews, getProfile, getStudentPhoto, getSyllabus, getTeacherPhotos, getTeachers, getTimetable,
 } from '../core/mygesData';
 import { BadCredentialsError, FileTooLargeError, MyGesError } from '../myges/errors';
 import { GesAPI } from '../myges/ges-api';
@@ -20,11 +20,13 @@ import {
     acquireDownload, courseSources, MAX_FILE_BYTES, releaseDownload, safeFileName, toDocuments,
 } from '../utils/documents';
 import { fullName } from '../utils/format';
+import { buildIcs } from '../utils/ics';
 import { log, logError } from '../utils/logger';
+import { fetchPhotoBuffer, imageType } from '../utils/photo';
 import { RateLimiter } from '../utils/rateLimit';
 import { getCurrentYear } from '../utils/schoolYear';
 import { Session, Sessions } from './sessions';
-import { absencesView, coursesView, eventsView, newsView, notesView, projectDetail, projectsView, syllabusView } from './views';
+import { absencesView, allEventsView, coursesView, directoryView, eventsView, monthDays, newsView, notesView, profileView, projectDetail, projectsView, syllabusView, teamMemberIds } from './views';
 import type { GesAuthenticationToken } from '../myges/types/auth';
 
 const COOKIE = '__Host-panel';
@@ -32,12 +34,14 @@ const MAX_BODY_BYTES = 4_096;
 const ANNUAL = 'annual';
 const WINDOW_MS = 15 * 60_000;
 const CERT_RELOAD_MS = 6 * 3_600_000;
+// Durée d'agenda que MyGes sert d'une seule requête, vérifiée sur un vrai compte.
+const ICS_WEEKS = 12;
 // Durée maximale d'un téléchargement, envoi au client compris.
 const DOWNLOAD_DEADLINE_MS = 5 * 60_000;
 
 const HEADERS = {
     'Content-Security-Policy':
-        "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+        "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; manifest-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
     'Strict-Transport-Security': 'max-age=31536000',
     'X-Content-Type-Options': 'nosniff',
     'X-Frame-Options': 'DENY',
@@ -70,6 +74,10 @@ function loadStaticFiles() {
         ['/', file('index.html', 'text/html; charset=utf-8')],
         ['/app.js', file('app.js', 'text/javascript; charset=utf-8')],
         ['/style.css', file('style.css', 'text/css; charset=utf-8')],
+        ['/manifest.webmanifest', file('manifest.webmanifest', 'application/manifest+json; charset=utf-8')],
+        ['/icon-192.png', file('icon-192.png', 'image/png')],
+        ['/icon-512.png', file('icon-512.png', 'image/png')],
+        ['/apple-touch-icon.png', file('apple-touch-icon.png', 'image/png')],
     ]);
 }
 
@@ -187,6 +195,8 @@ export function createPanel({ trustProxy, tls }: { trustProxy: boolean; tls?: Tl
     // Connexions en boucle sur son propre compte, qui sollicitent MyGes tout autant.
     const logins = new RateLimiter(10, WINDOW_MS);
     const requests = new RateLimiter(120, 60_000);
+    // Une liste d'équipes affiche beaucoup de petites photos d'un coup : compteur à part.
+    const photoRequests = new RateLimiter(300, 60_000);
     // Chaque changement d'équipe est une vraie action sur MyGes, et il est journalisé.
     const teamChanges = new RateLimiter(10, WINDOW_MS);
 
@@ -198,10 +208,10 @@ export function createPanel({ trustProxy, tls }: { trustProxy: boolean; tls?: Tl
         return forwarded || peer || 'inconnue';
     };
 
-    const requireSession = (req: http.IncomingMessage): Session => {
+    const requireSession = (req: http.IncomingMessage, limiter = requests): Session => {
         const session = sessions.get(readCookie(req));
         if (!session) throw new HttpError(401, 'Session expirée.');
-        if (!requests.hit(session.account)) throw new HttpError(429, 'Trop de requêtes. Réessaie dans un instant.');
+        if (!limiter.hit(session.account)) throw new HttpError(429, 'Trop de requêtes. Réessaie dans un instant.');
         return session;
     };
 
@@ -312,7 +322,24 @@ export function createPanel({ trustProxy, tls }: { trustProxy: boolean; tls?: Tl
         };
     }
 
+    /** Un mois d'agenda : combien de cours chaque jour. La semaine en donne le détail. */
+    async function agendaMonth(session: Session, month: string) {
+        if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new HttpError(400, 'Mois invalide.');
+        const [year, index] = month.split('-').map(Number);
+        const first = new Date(year, index - 1, 1);
+        const end = new Date(year, index, 0, 23, 59, 59);
+        const raw = await read(session, (t) => getTimetable(session.key, t, first, end));
+        const days = monthDays(raw);
+        const afterMonth = addDays(end, 1);
+        const later = Object.keys(days).length
+            ? []
+            : coursesView(await read(session, (t) => getTimetable(session.key, t, afterMonth, addDays(afterMonth, 49))));
+        return { month, days, next: later[0]?.start ?? null };
+    }
+
     async function agenda(session: Session, url: URL) {
+        const month = url.searchParams.get('month');
+        if (month !== null) return agendaMonth(session, month);
         const asked = url.searchParams.get('week') ?? '';
         const date = /^\d{4}-\d{2}-\d{2}$/.test(asked) ? new Date(`${asked}T12:00:00`) : new Date();
         if (Number.isNaN(date.getTime())) throw new HttpError(400, 'Date invalide.');
@@ -325,6 +352,41 @@ export function createPanel({ trustProxy, tls }: { trustProxy: boolean; tls?: Tl
             ? []
             : coursesView(await read(session, (t) => getTimetable(session.key, t, addDays(monday, 7), addDays(monday, 49))));
         return { start: monday.getTime(), courses, next: later[0]?.start ?? null };
+    }
+
+    /**
+     * Adresse de la photo d'une personne que cet étudiant a le droit de voir : lui-même,
+     * sa classe, ses intervenants, les membres de ses projets. MyGes répond sur n'importe quel identifiant :
+     * sans ce contrôle, le panel deviendrait un annuaire de toute l'école. L'adresse vient
+     * toujours de MyGes, jamais du navigateur.
+     */
+    async function photoAddress(session: Session, who: string): Promise<string | null> {
+        if (who === 'moi' || Number(who) === session.uid) {
+            const profile = await read(session, (t) => getProfile(session.key, t));
+            return profile?._links?.photo?.href ?? null;
+        }
+        const id = Number(who);
+        const classmates = await read(session, (t) => getClassmatePhotos(session.key, t));
+        if (classmates[String(id)]) return classmates[String(id)];
+        const teachers = await read(session, (t) => getTeacherPhotos(session.key, t));
+        if (teachers[String(id)]) return teachers[String(id)];
+        const assignments = await read(session, (t) => getAssignments(session.key, t));
+        if (!teamMemberIds(assignments).has(id)) return null;
+        return read(session, (t) => getStudentPhoto(session.key, t, id));
+    }
+
+    /** Relaie une photo sans l'écrire nulle part : ni disque, ni cache, ici comme dans le navigateur. */
+    async function sendPhoto(req: http.IncomingMessage, res: http.ServerResponse, who: string) {
+        const session = requireSession(req, photoRequests);
+        const address = await photoAddress(session, who).catch((e) => {
+            if (e instanceof HttpError && e.status === 401) throw e;
+            return null;
+        });
+        const data = address ? await fetchPhotoBuffer(address, session.token, new Map()) : null;
+        const type = data && imageType(data);
+        if (!data || !type) throw new HttpError(404, 'Photo indisponible.');
+        res.writeHead(200, { ...HEADERS, 'Content-Type': type, 'Content-Length': data.length, 'Cache-Control': 'no-store' });
+        res.end(data);
     }
 
     /** Rejoint ou quitte une équipe, après avoir tout revérifié sur une lecture fraîche. */
@@ -434,6 +496,9 @@ export function createPanel({ trustProxy, tls }: { trustProxy: boolean; tls?: Tl
         if (req.method === 'POST' && teamRoute) return changeTeam(req, res, teamRoute[1], teamRoute[2], teamRoute[3]);
         if (req.method !== 'GET') throw new HttpError(405, 'Méthode refusée.');
 
+        const photoRoute = url.pathname.match(/^\/api\/photos\/(moi|\d{1,12})$/);
+        if (photoRoute) return sendPhoto(req, res, photoRoute[1]);
+
         const session = () => requireSession(req);
         const fileRoute = url.pathname.match(/^\/api\/documents\/([\w-]{1,40})(?:\/([\w-]{1,40}))?$/);
         switch (url.pathname) {
@@ -459,6 +524,49 @@ export function createPanel({ trustProxy, tls }: { trustProxy: boolean; tls?: Tl
             case '/api/projets': {
                 const s = session();
                 return sendJson(res, 200, projectsView(await read(s, (t) => getAssignments(s.key, t)), s.uid));
+            }
+            case '/api/evenements': {
+                const s = session();
+                return sendJson(res, 200, allEventsView(await read(s, (t) => getEvents(s.key, t))));
+            }
+            case '/api/annuaire': {
+                const s = session();
+                // Une liste indisponible n'empêche pas d'afficher l'autre. Un token refusé, si.
+                const optional = <T>(load: Promise<T[]>) => load.catch((e): T[] => {
+                    if (e instanceof HttpError && e.status === 401) throw e;
+                    return [];
+                });
+                const [classmates, teachers] = await Promise.all([
+                    optional(read(s, (t) => getClassmates(s.key, t))),
+                    optional(read(s, (t) => getTeachers(s.key, t))),
+                ]);
+                return sendJson(res, 200, directoryView(classmates, teachers));
+            }
+            case '/api/profil': {
+                const s = session();
+                const [profile, classes] = await Promise.all([
+                    read(s, (t) => getProfile(s.key, t)),
+                    read(s, (t) => getClasses(s.key, t)).catch((e) => {
+                        if (e instanceof HttpError && e.status === 401) throw e;
+                        return [];
+                    }),
+                ]);
+                return sendJson(res, 200, profileView(profile, classes));
+            }
+            case '/api/agenda.ics': {
+                const s = session();
+                const monday = getMonday(new Date());
+                const end = addDays(monday, ICS_WEEKS * 7 - 1);
+                end.setHours(23, 59, 59);
+                const ics = buildIcs(await read(s, (t) => getTimetable(s.key, t, monday, end)));
+                res.writeHead(200, {
+                    ...HEADERS,
+                    'Content-Type': 'text/calendar; charset=utf-8',
+                    'Content-Disposition': 'attachment; filename="emploi-du-temps.ics"',
+                    'Cache-Control': 'no-store',
+                });
+                res.end(ics);
+                return;
             }
             case '/api/news': {
                 const s = session();

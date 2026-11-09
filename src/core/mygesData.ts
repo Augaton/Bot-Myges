@@ -100,6 +100,80 @@ export function getEvents(userId: string, token: GesAuthenticationToken): Promis
     return cached(userId, 'events', TTL_MS.profile, async () => (await SchoolService.getEvents(token)) || []);
 }
 
+const photoLink = (person: any): string | null =>
+    person?._links?.photo?.href ?? (Array.isArray(person?.links) ? person.links.find((l: any) => l?.rel === 'photo')?.href : null) ?? null;
+
+/** Une personne de l'annuaire. L'adresse de sa photo ne quitte jamais le serveur. */
+export interface DirectoryPerson {
+    id: string;
+    firstname: string;
+    lastname: string;
+    email: string;
+    photo: string | null;
+}
+
+function toPerson(raw: any, withEmail: boolean): DirectoryPerson | null {
+    if (raw?.uid == null) return null;
+    return {
+        id: String(raw.uid),
+        firstname: String(raw?.firstname ?? ''),
+        lastname: String(raw?.lastname ?? ''),
+        // L'adresse d'un camarade n'a pas à rester en mémoire : seul un intervenant se contacte d'ici.
+        email: withEmail ? String(raw?.email ?? '') : '',
+        photo: photoLink(raw),
+    };
+}
+
+const photoMap = (people: DirectoryPerson[]): Record<string, string> =>
+    Object.fromEntries(people.flatMap((person) => (person.photo ? [[person.id, person.photo]] : [])));
+
+export function getClasses(userId: string, token: GesAuthenticationToken): Promise<any[]> {
+    const year = getCurrentYear();
+    return cached(userId, `classes|${year}`, TTL_MS.profile, async () => {
+        const classes: any = await SchoolService.getMyClasses(token, year);
+        return Array.isArray(classes) ? classes : [];
+    });
+}
+
+export function getClassmates(userId: string, token: GesAuthenticationToken): Promise<DirectoryPerson[]> {
+    const year = getCurrentYear();
+    return cached(userId, `classmates|${year}`, TTL_MS.profile, async () => {
+        const people = new Map<string, DirectoryPerson>();
+        for (const c of await getClasses(userId, token)) {
+            const students: any = (await SchoolService.getClassmates(token, c?.puid)) || [];
+            for (const s of Array.isArray(students) ? students : []) {
+                const person = toPerson(s, false);
+                if (person) people.set(person.id, person);
+            }
+        }
+        return [...people.values()];
+    });
+}
+
+export function getTeachers(userId: string, token: GesAuthenticationToken): Promise<DirectoryPerson[]> {
+    const year = getCurrentYear();
+    return cached(userId, `teachers|${year}`, TTL_MS.profile, async () => {
+        const teachers: any = (await SchoolService.getTeachers(token, year)) || [];
+        const people = (Array.isArray(teachers) ? teachers : []).map((t) => toPerson(t, true));
+        return people.filter((person): person is DirectoryPerson => person !== null);
+    });
+}
+
+/** Adresse de la photo de chaque camarade de classe. */
+export async function getClassmatePhotos(userId: string, token: GesAuthenticationToken): Promise<Record<string, string>> {
+    return photoMap(await getClassmates(userId, token));
+}
+
+/** Adresse de la photo de chaque intervenant. */
+export async function getTeacherPhotos(userId: string, token: GesAuthenticationToken): Promise<Record<string, string>> {
+    return photoMap(await getTeachers(userId, token));
+}
+
+/** Adresse de la photo d'un étudiant précis. L'appelant a vérifié qu'il partage un projet avec lui. */
+export function getStudentPhoto(userId: string, token: GesAuthenticationToken, id: number): Promise<string | null> {
+    return cached(userId, `student-photo|${id}`, TTL_MS.profile, async () => photoLink(await SchoolService.getStudent(token, id)));
+}
+
 export function getNews(userId: string, token: GesAuthenticationToken): Promise<any> {
     return cached(userId, 'news', TTL_MS.profile, async () => (await SchoolService.getNews(token)) ?? []);
 }
