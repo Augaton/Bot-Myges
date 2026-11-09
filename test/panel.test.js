@@ -98,7 +98,9 @@ test('isolation : le panel ne charge ni Discord, ni le canvas, ni les secrets du
     assert.deepStrictEqual(result.loaded, []);
     assert.strictEqual(result.token, null);
     assert.strictEqual(result.key, null);
-    assert.deepStrictEqual(result.s, { host: '127.0.0.1', port: 4321, trustProxy: true });
+    const { sessionsFile, ...settings } = result.s;
+    assert.deepStrictEqual(settings, { host: '127.0.0.1', port: 4321, trustProxy: true });
+    assert.strictEqual(sessionsFile, path.join(dir, 'panel_sessions.json'));
 });
 
 test('derrière un proxy, le panel démarre en HTTP sur 0.0.0.0 et le signale', () => {

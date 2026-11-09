@@ -97,6 +97,7 @@ function showLogin(message = '') {
   const error = h('p', { class: 'field-error', role: 'alert', hidden: !message }, message);
   const username = h('input', { id: 'username', name: 'username', autocomplete: 'username', autocapitalize: 'none', spellcheck: 'false', required: true, maxlength: 100 });
   const password = h('input', { id: 'password', name: 'password', type: 'password', autocomplete: 'current-password', required: true, maxlength: 200 });
+  const remember = h('input', { id: 'remember', name: 'remember', type: 'checkbox' });
   const submit = h('button', { type: 'submit', class: 'primary' }, 'Se connecter');
 
   const form = h('form', {
@@ -106,7 +107,7 @@ function showLogin(message = '') {
       submit.textContent = 'Connexion…';
       error.hidden = true;
       try {
-        const { name } = await post('/api/login', { username: username.value, password: password.value });
+        const { name } = await post('/api/login', { username: username.value, password: password.value, remember: remember.checked === true });
         password.value = '';
         showShell(name);
       } catch (e) {
@@ -121,12 +122,15 @@ function showLogin(message = '') {
   },
   h('div', {}, h('label', { for: 'username' }, 'Identifiant MyGES'), username),
   h('div', {}, h('label', { for: 'password' }, 'Mot de passe'), password, error),
+  h('div', {},
+    h('label', { class: 'check', for: 'remember' }, remember, h('span', {}, 'Rester connecté sur cet appareil')),
+    h('p', { class: 'muted small' }, 'À éviter sur un ordinateur partagé.')),
   submit);
 
   root.replaceChildren(h('div', { class: 'login' }, h('div', { class: 'login-box' },
     h('div', {}, h('h1', {}, 'Panel étudiant'), h('p', { class: 'muted' }, 'Ton agenda, tes notes et tes documents au même endroit.')),
     form,
-    h('p', { class: 'notice' }, 'Service non officiel, sans lien avec MyGES ni le Réseau GES. Ton mot de passe sert une seule fois à vérifier ton compte auprès de MyGES : il n\'est jamais enregistré.'))));
+    h('p', { class: 'notice' }, 'Service non officiel, sans lien avec MyGES ni le Réseau GES. Ton mot de passe sert une seule fois à vérifier ton compte auprès de MyGES : il n\'est jamais enregistré. Si tu restes connecté, seul un jeton chiffré est gardé sur le serveur, jusqu\'à son expiration.'))));
   username.focus();
 }
 

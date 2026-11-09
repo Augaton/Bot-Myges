@@ -9,6 +9,8 @@ export interface PanelSettings {
     port: number;
     trustProxy: boolean;
     tls?: { cert: string; key: string };
+    /** Sessions « Rester connecté », chiffrées (voir sessions.ts). */
+    sessionsFile: string;
 }
 
 export function readSettings(envFile = path.resolve(__dirname, '..', '..', '.env')): PanelSettings {
@@ -27,5 +29,6 @@ export function readSettings(envFile = path.resolve(__dirname, '..', '..', '.env
         port: Number(read('PANEL_PORT')) || 3000,
         trustProxy: read('PANEL_TRUST_PROXY') === '1',
         tls: cert && key ? { cert, key } : undefined,
+        sessionsFile: read('PANEL_SESSIONS_FILE') || path.resolve(path.dirname(envFile), 'panel_sessions.json'),
     };
 }

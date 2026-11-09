@@ -219,7 +219,8 @@ journalctl -u botmyges -f
 Site web où un étudiant consulte son agenda, ses notes, ses absences, ses projets,
 ses actualités et ses documents. Il se connecte avec son identifiant MyGES : le mot
 de passe sert une seule fois à obtenir un jeton auprès de MyGES, puis il est oublié.
-Rien n'est écrit sur disque, et un redémarrage déconnecte tout le monde.
+Par défaut, rien n'est écrit sur disque et un redémarrage déconnecte l'étudiant ; la case
+« Rester connecté » change cela (voir plus bas).
 
 Seuls les comptes dont MyGES indique le rôle `student` peuvent entrer.
 
@@ -233,6 +234,7 @@ cookie `Secure` n'est de toute façon pas accepté en HTTP simple.
 | `PANEL_PORT` | `3000` | Port d'écoute. |
 | `PANEL_TLS_CERT` | absent | Certificat (`fullchain.pem`). Relu toutes les 6 h, sans redémarrage. |
 | `PANEL_TLS_KEY` | absent | Clé privée (`privkey.pem`), en mode 600. |
+| `PANEL_SESSIONS_FILE` | `panel_sessions.json` à la racine | Sessions « Rester connecté », en mode 600. Le supprimer déconnecte tout le monde. |
 | `PANEL_TRUST_PROXY` | absent | `1` uniquement derrière un proxy, pour limiter les essais par visiteur. |
 
 Seules ces variables sont lues dans le `.env` : le processus du panel ne charge ni
@@ -371,8 +373,14 @@ sans `EnvironmentFile` : les variables du panel sont lues dans le `.env`.
 | Échecs de connexion, par 15 min | 5 par identifiant et par réseau, 20 par réseau, 20 par identifiant, 300 en tout |
 | Connexions réussies | 10 par compte et par 15 min |
 | Session | 3 par compte, 30 min d'inactivité, 12 h au plus, jamais au-delà du jeton MyGES |
+| « Rester connecté » | Jusqu'à l'expiration du jeton MyGES (7 jours environ), 30 jours au plus |
 | Requêtes | 120 par minute et par compte |
 | Téléchargements | 1 par compte, 3 en tout, 25 Mo au plus, 5 min au plus |
+
+« Rester connecté » est une case décochée par défaut. Le mot de passe n'est jamais gardé. Le jeton
+MyGES l'est, chiffré avec une clé tirée du cookie de l'étudiant : le serveur ne garde que l'empreinte
+de ce cookie, donc `panel_sessions.json` seul ne donne ni jeton, ni nom, ni identifiant. Il survit aux
+redémarrages. Une déconnexion efface l'entrée. Quand le jeton expire, l'étudiant se reconnecte.
 
 Un réseau est un /24 en IPv4 et un /64 en IPv6. Ces compteurs vivent en mémoire : un
 redémarrage les remet à zéro. Au-delà de 300 échecs par 15 min, plus personne ne peut

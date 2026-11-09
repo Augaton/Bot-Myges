@@ -5,6 +5,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const http = require('node:http');
+const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const { dist, json, redirect } = require('./helpers');
@@ -49,7 +50,8 @@ class El {
 let port;
 let server;
 test.before(() => new Promise((resolve) => {
-    server = createPanel({ trustProxy: false });
+    const sessionsFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'panel-ui-')), 'panel_sessions.json');
+    server = createPanel({ trustProxy: false, sessionsFile });
     server.listen(0, '127.0.0.1', () => {
         port = server.address().port;
         resolve();
@@ -60,6 +62,7 @@ test.after(() => server.close());
 /** Navigateur minimal : cookie gardé d'une requête à l'autre, comme le ferait le vrai. */
 function browser() {
     let cookie = '';
+    let rawCookie = '';
     const blobs = [];
     const requests = [];
     let failure = null;
@@ -77,7 +80,10 @@ function browser() {
             res.on('data', (c) => chunks.push(c));
             res.on('end', () => {
                 const set = res.headers['set-cookie']?.[0];
-                if (set) cookie = /Max-Age=0/.test(set) ? '' : set.split(';')[0];
+                if (set) {
+                    rawCookie = set;
+                    cookie = /Max-Age=0/.test(set) ? '' : set.split(';')[0];
+                }
                 const h = new Headers();
                 for (const [k, v] of Object.entries(res.headers)) if (typeof v === 'string') h.set(k, v);
                 resolve(new Response(Buffer.concat(chunks), { status: res.statusCode, headers: h }));
@@ -112,6 +118,7 @@ function browser() {
         requests,
         windowListeners,
         failNext: (status, html) => { failure = { status, html }; },
+        lastCookie: () => rawCookie,
         settle,
         text: () => root.textContent,
         byId: (id) => root.all((e) => e.attrs.id === id)[0],
@@ -651,6 +658,22 @@ test('installation : le bouton n\'apparaît que si le navigateur le propose, sin
     await page.button('Installer l\'application').click();
     await page.settle();
     assert.strictEqual(prompted, 1);
+});
+
+test('connexion : la case « Rester connecté » existe, décochée, et sa valeur est transmise', async (t) => {
+    t.mock.method(console, 'log', () => {});
+    mygesMock();
+    const page = browser();
+    await page.settle();
+    const box = page.byId('remember');
+    assert.ok(box);
+    assert.ok(!box.checked);
+    assert.match(page.text(), /ordinateur partagé/);
+    assert.match(page.text(), /jeton chiffré/);
+    box.checked = true;
+    await page.signIn('coche', 'bon');
+    assert.match(page.text(), /Bonjour Inès/);
+    assert.match(page.lastCookie(), /Max-Age=\d+/);
 });
 
 test('accueil : cours suivants, événements et actualités', async (t) => {

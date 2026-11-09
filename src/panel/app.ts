@@ -180,9 +180,9 @@ export function reloadTls(server: https.Server, tls: TlsFiles) {
     }
 }
 
-export function createPanel({ trustProxy, tls }: { trustProxy: boolean; tls?: TlsFiles }): http.Server | https.Server {
+export function createPanel({ trustProxy, tls, sessionsFile }: { trustProxy: boolean; tls?: TlsFiles; sessionsFile?: string }): http.Server | https.Server {
     const statics = loadStaticFiles();
-    const sessions = new Sessions();
+    const sessions = new Sessions(sessionsFile);
 
     // Essais échoués. Un essai réussi ne compte pas : toute une classe peut se connecter
     // depuis le même Wi-Fi. Chaque limite vise un risque précis :
@@ -281,12 +281,14 @@ export function createPanel({ trustProxy, tls }: { trustProxy: boolean; tls?: Tl
             throw new HttpError(403, 'Ce panel est réservé aux étudiants.');
         }
 
-        const { cookie, session } = sessions.open(token, username, account, uid);
-        const profile = await getProfile(session.key, token).catch(() => null);
-        if (profile) session.name = fullName({ firstname: profile?.firstname, lastname: profile?.name });
+        const profile = await ProfileService.getProfile(token).catch(() => null);
+        const name = profile ? fullName({ firstname: profile?.firstname, lastname: profile?.name }) : username;
+        const { cookie, session } = sessions.open(token, name, account, uid, body?.remember === true);
         log('PANEL', 'Connexion réussie.');
+        // Sans Max-Age, le cookie disparaît à la fermeture du navigateur.
+        const maxAge = session.remember ? `; Max-Age=${Math.max(0, Math.floor((session.expiresAt - Date.now()) / 1000))}` : '';
         sendJson(res, 200, { name: session.name }, {
-            'Set-Cookie': `${COOKIE}=${cookie}; Path=/; HttpOnly; Secure; SameSite=Strict`,
+            'Set-Cookie': `${COOKIE}=${cookie}; Path=/; HttpOnly; Secure; SameSite=Strict${maxAge}`,
         });
     }
 

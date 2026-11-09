@@ -4,6 +4,8 @@
 # Identifiants utilisateurs chiffrés : NE JAMAIS commit
 # (dont le temporaire d'écriture et les copies .bak-avant-scrypt)
 saved_data.json*
+# Sessions du panel, chiffrées : elles restent sur le serveur
+panel_sessions.json*
 # Certificats HTTPS du panel
 /certs
 *.pem

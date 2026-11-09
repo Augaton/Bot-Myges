@@ -90,6 +90,9 @@ input, select {
 .field-error { color: var(--danger); font-size: .875rem; }
 .notice { font-size: .875rem; color: var(--muted); border-top: 1px solid var(--line); padding-top: 16px; }
 
+label.check { display: flex; align-items: center; gap: 8px; min-height: 44px; margin: 0; font-weight: 400; font-size: 1rem; cursor: pointer; }
+label.check input { flex: none; width: 20px; min-height: 0; height: 20px; accent-color: var(--accent); }
+
 /* Cadre */
 .shell { min-height: 100vh; }
 .top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 12px 16px 8px; }
