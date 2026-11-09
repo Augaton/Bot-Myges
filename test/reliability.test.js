@@ -134,6 +134,70 @@ test('brouillons : invisibles dans les projets comme dans les TP', async () => {
     assert.deepStrictEqual(names(await mygesData.getAssignments('draft', token)).filter((n) => n === 'Brouillon'), []);
 });
 
+const thisYear = () => Number(dist('utils/schoolYear.js').getCurrentYear());
+
+test('annuaire élargi : étudiants de plusieurs promotions, promotion à jour, une année en échec ignorée', async () => {
+    const y = thisYear();
+    kordis({
+        '/me/years': () => json(200, { result: [y - 2, y - 1, y] }),
+        '/classes/30/students': () => json(200, { result: [{ uid: 1, firstname: 'Alice', lastname: 'A' }, { uid: 2, firstname: 'Bob', lastname: 'B' }] }),
+        '/classes/31/students': () => json(200, { result: [{ uid: 2, firstname: 'Bob', lastname: 'Ancien' }, { uid: 3, firstname: 'Chloé', lastname: 'C' }] }),
+        [`/${y}/classes`]: () => json(200, { result: [{ puid: 30, promotion: 'Promo actuelle' }] }),
+        [`/${y - 1}/classes`]: () => json(200, { result: [{ puid: 31, promotion: 'Promo précédente' }] }),
+        [`/${y - 2}/classes`]: () => json(403, {}), // année en échec : ignorée, sans tout casser
+    });
+    const people = await mygesData.getClassmates('multi', { token_type: 'bearer', access_token: 't' });
+    const byId = Object.fromEntries(people.map((p) => [p.id, p]));
+    assert.deepStrictEqual(Object.keys(byId).sort(), ['1', '2', '3']);
+    assert.strictEqual(byId['2'].group, 'Promo actuelle'); // présent les deux années : l'année courante l'emporte
+    assert.strictEqual(byId['3'].group, 'Promo précédente');
+});
+
+test('annuaire élargi : seules les années d\'inscription sont lues, et en parallèle', async () => {
+    const y = thisYear();
+    const asked = [];
+    let inflight = 0;
+    let peak = 0;
+    globalThis.fetch = async (url) => {
+        const u = String(url);
+        asked.push(u);
+        inflight++;
+        peak = Math.max(peak, inflight);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        inflight--;
+        if (u.endsWith('/me/years')) return json(200, { result: [y - 1, y] });
+        const year = u.match(/\/me\/(\d{4})\/classes$/);
+        if (year) return json(200, { result: [{ puid: Number(year[1]), promotion: `P${year[1]}` }] });
+        return json(200, { result: [{ uid: Number(u.match(/classes\/(\d+)\//)[1]), firstname: 'E', lastname: 'L' }] });
+    };
+    const people = await mygesData.getClassmates('paralleles', { token_type: 'bearer', access_token: 't' });
+    assert.strictEqual(people.length, 2);
+    const classLists = asked.filter((u) => /\/me\/\d{4}\/classes$/.test(u));
+    assert.deepStrictEqual(classLists.map((u) => u.match(/(\d{4})/)[1]).sort(), [String(y - 1), String(y)]); // pas d'année sondée pour rien
+    assert.ok(peak >= 2, `années lues l'une après l'autre (au plus ${peak} en parallèle)`);
+});
+
+test('années passées : gardées une heure en cache, l\'année en cours quelques minutes', async (t) => {
+    t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+    const y = thisYear();
+    const seen = kordis({ '/grades': () => json(200, { result: [{ course: 'Réseaux', average: 12 }] }) });
+    const token = { token_type: 'bearer', access_token: 't' };
+    await mygesData.getGrades('archive', token, String(y - 1));
+    await mygesData.getGrades('archive', token, String(y));
+    t.mock.timers.tick(10 * 60_000);
+    await mygesData.getGrades('archive', token, String(y - 1)); // toujours en cache
+    await mygesData.getGrades('archive', token, String(y)); // relue
+    assert.strictEqual(seen.reads, 3);
+    t.mock.timers.tick(61 * 60_000);
+    await mygesData.getGrades('archive', token, String(y - 1)); // relue après une heure
+    assert.strictEqual(seen.reads, 4);
+});
+
+test('annuaire : un token refusé fait bien tomber la session (401 propagé)', async () => {
+    kordis({ '/classes': () => json(401, {}) });
+    await assert.rejects(mygesData.getClassmates('mort', { token_type: 'bearer', access_token: 't' }), (e) => e?.status === 401);
+});
+
 function clearAccounts() {
     const data = store.loadData();
     data.users = {};
@@ -319,4 +383,56 @@ test('fichiers du panel : compressés à la demande, 304 si inchangés, sécurit
     assert.strictEqual(api.headers.etag, undefined);
     assert.strictEqual(api.headers['cache-control'], 'no-store');
     await new Promise((resolve) => server.close(resolve));
+});
+
+test('années MyGes : formats variés acceptés, valeurs absurdes ignorées, 401 propagé', async () => {
+    const { getCurrentYear } = dist('utils/schoolYear.js');
+    const current = Number(getCurrentYear());
+    const token = { token_type: 'bearer', access_token: 't' };
+    kordis({ '/me/years': () => json(200, { result: [{ year: current - 1 }, `${current - 2}-${current - 1}`, 1990, current + 3, 'n/a', null] }) });
+    assert.deepStrictEqual(await mygesData.getYears('formats', token), [current, current - 1, current - 2].map(String));
+
+    kordis({ '/me/years': () => json(200, { result: [current] }) }); // première année : rien d'autre à proposer
+    assert.deepStrictEqual(await mygesData.getYears('premiere', token), [String(current)]);
+
+    kordis({ '/me/years': () => json(401, {}) });
+    await assert.rejects(mygesData.getYears('refus', token), (e) => e?.status === 401);
+});
+
+test('/absences et /notes : option « annee », année lue et affichée', async (t) => {
+    quiet(t);
+    const { getCurrentYear } = dist('utils/schoolYear.js');
+    const past = String(Number(getCurrentYear()) - 1);
+    const absences = dist('commands/absences.js').default;
+    const notes = dist('commands/notes.js').default;
+    for (const command of [absences, notes]) {
+        const option = command.data.toJSON().options.find((o) => o.name === 'annee');
+        assert.ok(option, command.data.name);
+        assert.strictEqual(option.required, false);
+        assert.strictEqual(option.choices[0].value, getCurrentYear());
+        assert.ok(option.choices.every((c) => Number(c.value) <= Number(getCurrentYear())));
+    }
+
+    account('annee');
+    store.openSession('annee', { token_type: 'bearer', access_token: 't' });
+    const urls = [];
+    globalThis.fetch = async (url) => {
+        urls.push(String(url));
+        return json(200, { result: [{ course_name: 'Réseaux', date: '2025-01-10', justified: false }] });
+    };
+    const replies = [];
+    const interaction = (value) => ({
+        user: { id: 'annee' },
+        options: { getString: (name) => (name === 'annee' ? value : null) },
+        deferReply: async () => {},
+        editReply: async (r) => replies.push(r),
+    });
+    await absences.execute(interaction(past));
+    assert.ok(urls.some((u) => u.endsWith(`/me/${past}/absences`)), urls.join(' '));
+    assert.match(replies.at(-1).embeds[0].data.title, new RegExp(`${past}-${Number(past) + 1}`));
+
+    // Une valeur trafiquée retombe sur l'année en cours.
+    urls.length = 0;
+    await absences.execute(interaction('../../x'));
+    assert.ok(urls.some((u) => u.endsWith(`/me/${getCurrentYear()}/absences`)), urls.join(' '));
 });

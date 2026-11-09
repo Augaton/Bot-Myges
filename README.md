@@ -14,8 +14,8 @@ Bot Discord tout-en-un pour MyGES : agenda, notes, absences et projets directeme
 | `/agenda` | Cours du jour ou de la semaine, avec navigation |
 | `/prochain` | Prochain cours à venir |
 | `/export` | Emploi du temps en `.ics`, pour Google Agenda ou Apple Calendrier |
-| `/notes` | Notes et moyennes par matière, en vue graphique |
-| `/absences` | Absences enregistrées sur MyGES |
+| `/notes` | Notes et moyennes par matière, en vue graphique ; option `annee` pour une année passée |
+| `/absences` | Absences enregistrées sur MyGES ; option `annee` pour une année passée |
 | `/projets` | Projets en cours et prochaines étapes |
 | `/profil` | Informations du profil MyGES |
 | `/profs`, `/trombi` | Professeurs et trombinoscope de la classe |
@@ -29,7 +29,7 @@ Bot Discord tout-en-un pour MyGES : agenda, notes, absences et projets directeme
 
 Un site web, séparé du bot, pour consulter son agenda, ses notes, ses absences, ses projets, les actualités et ses documents. L'étudiant se connecte avec son identifiant MyGES : le mot de passe sert une seule fois à obtenir un jeton, il n'est jamais enregistré. La case « Rester connecté » garde ce jeton, chiffré, jusqu'à son expiration (7 jours environ). Ce service n'a aucun lien officiel avec MyGES ni le Réseau GES.
 
-On y trouve aussi sa classe et ses intervenants avec leurs photos, relayées sans être enregistrées, les événements de l'école, l'agenda au mois et un export en `.ics`. Il s'installe sur un téléphone comme une application, sans rien garder hors ligne. Seuls les comptes étudiants peuvent y entrer. Il démarre avec le bot quand `PANEL_PORT` est renseigné, ou seul avec `npm run panel`, et demande un certificat HTTPS, possible sur une simple adresse IP : voir [DEPLOY.md](DEPLOY.md).
+Notes, absences et documents se consultent aussi pour les années passées. On y trouve aussi les étudiants de toutes ses promotions et ses intervenants avec leurs photos, relayées sans être enregistrées, les événements de l'école, l'agenda au mois et un export en `.ics`. Il s'installe sur un téléphone comme une application, sans rien garder hors ligne. Seuls les comptes étudiants peuvent y entrer. Il démarre avec le bot quand `PANEL_PORT` est renseigné, ou seul avec `npm run panel`, et demande un certificat HTTPS, possible sur une simple adresse IP : voir [DEPLOY.md](DEPLOY.md).
 
 ## Alertes en message privé
 

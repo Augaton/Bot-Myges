@@ -4,6 +4,7 @@ import {
 } from 'discord.js';
 import { Command } from '../core/command';
 import { getGrades } from '../core/mygesData';
+import { chosenYear, getCurrentYear, yearChoices, yearLabel } from '../utils/schoolYear';
 import { log, logError } from '../utils/logger';
 import { apiErrorMessage, sessionFor } from '../utils/replies';
 import { shareRow, SHARE_ID } from '../utils/share';
@@ -19,21 +20,26 @@ const MENU_MAX = 25;
 const command: Command = {
     data: new SlashCommandBuilder()
         .setName('notes')
-        .setDescription('Affiche les notes et moyennes par matière (vue graphique)'),
+        .setDescription('Affiche les notes et moyennes par matière (vue graphique)')
+        .addStringOption((option) => option
+            .setName('annee')
+            .setDescription('Année scolaire (par défaut : l\'année en cours)')
+            .addChoices(...yearChoices())),
 
     execute: async (interaction: ChatInputCommandInteraction) => {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const token = await sessionFor(interaction);
         if (!token) return;
 
+        const year = chosenYear(interaction.options.getString('annee'));
         let grades: any[];
         try {
-            grades = await getGrades(interaction.user.id, token);
+            grades = await getGrades(interaction.user.id, token, year);
         } catch (e) {
             logError('NOTES', 'Récupération des notes impossible :', e);
             return interaction.editReply(apiErrorMessage(e, 'les notes'));
         }
-        if (!grades || grades.length === 0) return interaction.editReply('Aucune note disponible.');
+        if (!grades || grades.length === 0) return interaction.editReply(year === getCurrentYear() ? 'Aucune note disponible.' : `Aucune note en ${yearLabel(year)}.`);
 
         // Tri naturel ("Trimestre 2" après "Trimestre 1") : l'ordre renvoyé par
         // l'API n'est pas garanti, on veut un affichage stable.

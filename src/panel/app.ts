@@ -8,7 +8,7 @@ import * as net from 'node:net';
 import * as path from 'node:path';
 import * as zlib from 'node:zlib';
 import {
-    forgetAssignments, getAbsences, getAnnualDocuments, getAssignments, getClasses, getClassmatePhotos, getClassmates, getCourseFiles, getCourses, getEvents, getGrades, getNews, getProfile, getStudentPhoto, getSyllabus, getTeacherPhotos, getTeachers, getTimetable,
+    forgetAssignments, getAbsences, getAnnualDocuments, getAssignments, getClasses, getClassmatePhotos, getClassmates, getCourseFiles, getCourses, getEvents, getGrades, getNews, getProfile, getStudentPhoto, getSyllabus, getTeacherPhotos, getTeachers, getTimetable, getYears,
 } from '../core/mygesData';
 import { BadCredentialsError, FileTooLargeError, MyGesError } from '../myges/errors';
 import { GesAPI } from '../myges/ges-api';
@@ -437,14 +437,29 @@ export function createPanel({ trustProxy, tls, sessionsFile }: { trustProxy: boo
         sendJson(res, 200, projectDetail(fresh, id, session.uid));
     }
 
-    async function documents(session: Session) {
-        const sources = courseSources(await read(session, (t) => getCourses(session.key, t)));
+    /**
+     * Année demandée par `?year=` : l'une de celles que MyGes propose à cet étudiant.
+     * Sans paramètre, l'année en cours.
+     */
+    async function askedYear(session: Session, url: URL): Promise<string> {
+        const asked = url.searchParams.get('year');
+        if (!asked) return getCurrentYear();
+        if (!/^\d{4}$/.test(asked)) throw new HttpError(400, 'Année invalide.');
+        const years = await read(session, (t) => getYears(session.key, t));
+        if (!years.includes(asked)) throw new HttpError(404, 'Année indisponible.');
+        return asked;
+    }
+
+    async function documents(session: Session, year: string) {
+        const sources = courseSources(await read(session, (t) => getCourses(session.key, t, year)));
         return [{ id: ANNUAL, name: 'Documents annuels', hint: 'Calendriers, informations générales…' }, ...sources];
     }
 
-    async function documentFiles(session: Session, source: string) {
+    async function documentFiles(session: Session, source: string, url: URL) {
+        // Les supports d'une matière ne dépendent que d'elle ; les documents annuels, de l'année.
+        const year = source === ANNUAL ? await askedYear(session, url) : '';
         const payload = await read(session, (t) => (source === ANNUAL
-            ? getAnnualDocuments(session.key, t)
+            ? getAnnualDocuments(session.key, t, year)
             : getCourseFiles(session.key, t, source)));
         return toDocuments(payload);
     }
@@ -528,16 +543,22 @@ export function createPanel({ trustProxy, tls, sessionsFile }: { trustProxy: boo
             case '/api/session': return sendJson(res, 200, { name: session().name });
             case '/api/home': return sendJson(res, 200, await home(session()));
             case '/api/agenda': return sendJson(res, 200, await agenda(session(), url));
+            case '/api/annees': {
+                const s = session();
+                return sendJson(res, 200, { current: getCurrentYear(), years: await read(s, (t) => getYears(s.key, t)) });
+            }
             case '/api/notes': {
                 const s = session();
-                return sendJson(res, 200, notesView(await read(s, (t) => getGrades(s.key, t))));
+                const year = await askedYear(s, url);
+                return sendJson(res, 200, notesView(await read(s, (t) => getGrades(s.key, t, year))));
             }
             case '/api/absences': {
                 const s = session();
+                const year = await askedYear(s, url);
                 // Les notes ne font qu'enrichir l'écran : leur panne ne prive pas des absences.
                 const [absences, grades] = await Promise.all([
-                    read(s, (t) => getAbsences(s.key, t)),
-                    read(s, (t) => getGrades(s.key, t)).catch((e) => {
+                    read(s, (t) => getAbsences(s.key, t, year)),
+                    read(s, (t) => getGrades(s.key, t, year)).catch((e) => {
                         if (e instanceof HttpError && e.status === 401) throw e;
                         return [];
                     }),
@@ -595,7 +616,10 @@ export function createPanel({ trustProxy, tls, sessionsFile }: { trustProxy: boo
                 const s = session();
                 return sendJson(res, 200, newsView(await read(s, (t) => getNews(s.key, t))));
             }
-            case '/api/documents': return sendJson(res, 200, await documents(session()));
+            case '/api/documents': {
+                const s = session();
+                return sendJson(res, 200, await documents(s, await askedYear(s, url)));
+            }
         }
         const syllabus = url.pathname.match(/^\/api\/courses\/([\w-]{1,40})\/syllabus$/);
         if (syllabus) {
@@ -623,7 +647,7 @@ export function createPanel({ trustProxy, tls, sessionsFile }: { trustProxy: boo
                 ? ProjectService.downloadProjectFile(t, fileId, MAX_FILE_BYTES)
                 : ProjectService.downloadStepFile(t, fileId, MAX_FILE_BYTES)));
         }
-        if (fileRoute) return sendJson(res, 200, await documentFiles(session(), fileRoute[1]));
+        if (fileRoute) return sendJson(res, 200, await documentFiles(session(), fileRoute[1], url));
         throw new HttpError(404, 'Page introuvable.');
     }
 

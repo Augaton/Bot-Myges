@@ -20,7 +20,12 @@ const TTL_MS = {
     profile: 10 * 60_000,
     projects: 60_000,
     documents: 5 * 60_000,
+    // Une année terminée ne bouge presque plus : relue au plus une fois par heure.
+    archive: 60 * 60_000,
 };
+
+/** Cache d'une donnée annuelle : court pour l'année en cours, long pour une année passée. */
+const ttlFor = (year: string, ttl: number) => (year === getCurrentYear() ? ttl : TTL_MS.archive);
 
 // Plus d'entrées qu'il n'y paraît : l'écran Documents du panel lit toutes les matières.
 const cache = new TtlCache<unknown>(TTL_MS.timetable, 2_000);
@@ -54,8 +59,8 @@ export function getCourseFiles(userId: string, token: GesAuthenticationToken, rc
     return cached(userId, `files|${rcId}`, TTL_MS.documents, () => DocumentService.getCourseFiles(token, rcId));
 }
 
-export function getAnnualDocuments(userId: string, token: GesAuthenticationToken) {
-    return cached(userId, `annual|${getCurrentYear()}`, TTL_MS.documents, () => DocumentService.getAnnualDocuments(token, getCurrentYear()));
+export function getAnnualDocuments(userId: string, token: GesAuthenticationToken, year = getCurrentYear()) {
+    return cached(userId, `annual|${year}`, ttlFor(year, TTL_MS.documents), () => DocumentService.getAnnualDocuments(token, year));
 }
 
 /** Efface toutes les données en cache d'un utilisateur. */
@@ -84,23 +89,20 @@ export function getTimetable(userId: string, token: GesAuthenticationToken, star
         (await TimetableService.getTimetable(token, start, end)) || []);
 }
 
-export function getGrades(userId: string, token: GesAuthenticationToken): Promise<any[]> {
-    const year = getCurrentYear();
-    return cached(userId, `grades|${year}`, TTL_MS.grades, async () => (await ProfileService.getGrades(token, year)) || []);
+export function getGrades(userId: string, token: GesAuthenticationToken, year = getCurrentYear()): Promise<any[]> {
+    return cached(userId, `grades|${year}`, ttlFor(year, TTL_MS.grades), async () => (await ProfileService.getGrades(token, year)) || []);
 }
 
 export function getProfile(userId: string, token: GesAuthenticationToken): Promise<any> {
     return cached(userId, 'profile', TTL_MS.profile, () => ProfileService.getProfile(token));
 }
 
-export function getAbsences(userId: string, token: GesAuthenticationToken): Promise<any[]> {
-    const year = getCurrentYear();
-    return cached(userId, `absences|${year}`, TTL_MS.grades, async () => (await ProfileService.getAbsences(token, year)) || []);
+export function getAbsences(userId: string, token: GesAuthenticationToken, year = getCurrentYear()): Promise<any[]> {
+    return cached(userId, `absences|${year}`, ttlFor(year, TTL_MS.grades), async () => (await ProfileService.getAbsences(token, year)) || []);
 }
 
-export function getCourses(userId: string, token: GesAuthenticationToken): Promise<any[]> {
-    const year = getCurrentYear();
-    return cached(userId, `courses|${year}`, TTL_MS.profile, async () => (await ProfileService.getCourses(token, year)) || []);
+export function getCourses(userId: string, token: GesAuthenticationToken, year = getCurrentYear()): Promise<any[]> {
+    return cached(userId, `courses|${year}`, ttlFor(year, TTL_MS.profile), async () => (await ProfileService.getCourses(token, year)) || []);
 }
 
 export function getSyllabus(userId: string, token: GesAuthenticationToken, rcId: string): Promise<any> {
@@ -121,6 +123,8 @@ export interface DirectoryPerson {
     lastname: string;
     email: string;
     photo: string | null;
+    /** Promotion d'où vient la personne (annuaire étendu sur plusieurs années). */
+    group?: string;
 }
 
 function toPerson(raw: any, withEmail: boolean): DirectoryPerson | null {
@@ -146,15 +150,81 @@ export function getClasses(userId: string, token: GesAuthenticationToken): Promi
     });
 }
 
+// Annuaire étendu aux promotions : les classes de l'étudiant, sur chacune de ses années
+// d'inscription. MyGes n'a pas d'annuaire de toute l'école (`/me/{année}/students`
+// répond 418), et balayer les identifiants un à un collecterait des inconnus.
+
+// Années proposées quand MyGes ne les donne pas : un cursus bachelor (3) puis master (2).
+const RECENT_YEARS = 5;
+
+async function studentsOfYear(token: GesAuthenticationToken, year: string): Promise<DirectoryPerson[]> {
+    const classes: any = await SchoolService.getMyClasses(token, year);
+    // Les classes d'une année sont lues ensemble : une attente au lieu d'une par classe.
+    const lists = await Promise.all((Array.isArray(classes) ? classes : []).map(async (c: any) => {
+        const group = String(c?.promotion || c?.name || '').trim();
+        const students: any = (await SchoolService.getClassmates(token, c?.puid)) || [];
+        return (Array.isArray(students) ? students : []).flatMap((s: any) => {
+            const person = toPerson(s, false);
+            return person ? [group ? { ...person, group } : person] : [];
+        });
+    }));
+    return lists.flat();
+}
+
+// Années consultables (notes, absences, documents des années passées). MyGes les liste
+// dans /me/years ; une valeur hors des dix dernières années est ignorée.
+const YEARS_BACK = 10;
+
+function yearOf(item: any): number {
+    const candidates = item && typeof item === 'object' ? [item.year, item.annee, item.value, item.label, item.name] : [item];
+    for (const value of candidates) {
+        const year = parseInt(String(value ?? ''), 10); // « 2025-2026 » donne 2025
+        if (Number.isInteger(year)) return year;
+    }
+    return NaN;
+}
+
+export function getYears(userId: string, token: GesAuthenticationToken): Promise<string[]> {
+    return cached(userId, 'years', TTL_MS.profile, async () => {
+        const current = Number(getCurrentYear());
+        const years = new Set<number>([current]);
+        let raw: any = null;
+        try {
+            raw = await ProfileService.getYears(token);
+        } catch (e: any) {
+            if (e?.status === 401) throw e; // token mort : la session doit tomber
+        }
+        let usable = false;
+        for (const item of Array.isArray(raw) ? raw : []) {
+            const year = yearOf(item);
+            if (year <= current && year > current - YEARS_BACK) {
+                years.add(year);
+                usable = true;
+            }
+        }
+        // Réponse inexploitable : on propose les dernières années ; une année vide le dira.
+        if (!usable) for (let i = 1; i < RECENT_YEARS; i++) years.add(current - i);
+        return [...years].sort((a, b) => b - a).map(String);
+    });
+}
+
 export function getClassmates(userId: string, token: GesAuthenticationToken): Promise<DirectoryPerson[]> {
-    const year = getCurrentYear();
-    return cached(userId, `classmates|${year}`, TTL_MS.profile, async () => {
+    return cached(userId, `classmates|${getCurrentYear()}`, TTL_MS.profile, async () => {
+        // Les années d'inscription que donne MyGes (à défaut, les dernières), lues ensemble.
+        const years = await getYears(userId, token);
+        const results = await Promise.allSettled(years.map((year) => studentsOfYear(token, year)));
         const people = new Map<string, DirectoryPerson>();
-        for (const c of await getClasses(userId, token)) {
-            const students: any = (await SchoolService.getClassmates(token, c?.puid)) || [];
-            for (const s of Array.isArray(students) ? students : []) {
-                const person = toPerson(s, false);
-                if (person) people.set(person.id, person);
+        // Dans l'ordre des années, la plus récente d'abord : si quelqu'un revient d'une
+        // année à l'autre, sa promotion actuelle l'emporte.
+        for (const result of results) {
+            if (result.status === 'rejected') {
+                // Un token mort doit faire tomber la session ; une année indisponible
+                // (jamais inscrit, erreur passagère) laisse simplement les autres s'afficher.
+                if ((result.reason as any)?.status === 401) throw result.reason;
+                continue;
+            }
+            for (const person of result.value) {
+                if (!people.has(person.id)) people.set(person.id, person);
             }
         }
         return [...people.values()];

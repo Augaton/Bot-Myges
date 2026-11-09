@@ -219,9 +219,11 @@ export function projectDetail(raw: any, id: string, uid: number | null) {
 /** Annuaire : des noms, et l'adresse e-mail des seuls intervenants. Aucune adresse de photo. */
 export function directoryView(classmates: any[], teachers: any[]) {
     const byName = (a: any, b: any) => collator.compare(a.lastname, b.lastname) || collator.compare(a.firstname, b.firstname);
+    const byGroupName = (a: any, b: any) => collator.compare(a.group ?? '', b.group ?? '') || byName(a, b);
     const name = (person: any) => fullName({ firstname: person.firstname, lastname: person.lastname });
     return {
-        classmates: [...list(classmates)].sort(byName).map((person) => ({ id: person.id, name: name(person) })),
+        // Étudiants de toutes les promotions, regroupés par promotion puis par nom.
+        classmates: [...list(classmates)].sort(byGroupName).map((person) => ({ id: person.id, name: name(person), group: String(person.group ?? '') })),
         teachers: [...list(teachers)].sort(byName).map((person) => ({ id: person.id, name: name(person), email: person.email })),
     };
 }

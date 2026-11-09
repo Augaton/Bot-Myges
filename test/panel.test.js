@@ -155,7 +155,7 @@ test('rôle illisible car MyGes est en panne : pas de session, message de panne'
 });
 
 test('API : rien sans session, même pas avec un cookie inventé', async () => {
-    for (const url of ['/api/session', '/api/home', '/api/agenda', '/api/notes', '/api/absences', '/api/projets', '/api/news', '/api/documents', '/api/documents/42', '/api/documents/42/7', '/api/courses/42/syllabus', '/api/projets/1', '/api/projets/1/depots/2', '/api/photos/moi', '/api/photos/8', '/api/annuaire', '/api/profil', '/api/agenda.ics', '/api/evenements', '/api/agenda?month=2026-11']) {
+    for (const url of ['/api/session', '/api/home', '/api/agenda', '/api/notes', '/api/absences', '/api/projets', '/api/news', '/api/documents', '/api/documents/42', '/api/documents/42/7', '/api/courses/42/syllabus', '/api/projets/1', '/api/projets/1/depots/2', '/api/photos/moi', '/api/photos/8', '/api/annuaire', '/api/profil', '/api/agenda.ics', '/api/evenements', '/api/agenda?month=2026-11', '/api/annees', '/api/notes?year=2025']) {
         assert.strictEqual((await call('GET', url)).status, 401, url);
         assert.strictEqual((await call('GET', url, { cookie: '__Host-panel=invente' })).status, 401, url);
     }

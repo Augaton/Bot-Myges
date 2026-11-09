@@ -1,6 +1,7 @@
 import { ChatInputCommandInteraction, EmbedBuilder, MessageFlags, SlashCommandBuilder } from 'discord.js';
 import { Command } from '../core/command';
 import { getAbsences } from '../core/mygesData';
+import { chosenYear, getCurrentYear, yearChoices, yearLabel } from '../utils/schoolYear';
 import { logError } from '../utils/logger';
 import { apiErrorMessage, sessionFor } from '../utils/replies';
 import { shareRow } from '../utils/share';
@@ -8,23 +9,29 @@ import { shareRow } from '../utils/share';
 const command: Command = {
     data: new SlashCommandBuilder()
         .setName('absences')
-        .setDescription('Les absences enregistrées sur MyGes'),
+        .setDescription('Les absences enregistrées sur MyGes')
+        .addStringOption((option) => option
+            .setName('annee')
+            .setDescription('Année scolaire (par défaut : l\'année en cours)')
+            .addChoices(...yearChoices())),
 
     execute: async (interaction: ChatInputCommandInteraction) => {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const token = await sessionFor(interaction);
         if (!token) return;
 
+        const year = chosenYear(interaction.options.getString('annee'));
         let abs: any[];
         try {
-            abs = await getAbsences(interaction.user.id, token);
+            abs = await getAbsences(interaction.user.id, token, year);
         } catch (e) {
             logError('ABSENCES', 'Récupération des absences impossible :', e);
             return interaction.editReply(apiErrorMessage(e, 'les absences'));
         }
         if (!Array.isArray(abs)) abs = [];
 
-        const embed = new EmbedBuilder().setTitle(`🚫 Absences (${abs.length})`).setColor(0xff0000);
+        const past = year !== getCurrentYear();
+        const embed = new EmbedBuilder().setTitle(`🚫 Absences${past ? ` ${yearLabel(year)}` : ''} (${abs.length})`).setColor(0xff0000);
 
         if (!abs.length) {
             embed.setDescription('Aucune absence !');

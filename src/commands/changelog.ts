@@ -11,26 +11,29 @@ export function buildChangelogEmbed(client: Client): EmbedBuilder {
     // Annonce publique : le lien du panel n'y figure que s'il a été renseigné.
     const panelLink = panelPublicUrl();
     return new EmbedBuilder()
-        .setTitle(`🚀 Mise à jour ${BOT_VERSION} - "Reste connecté"`)
-        .setDescription('Le panel étudiant garde ta session si tu le demandes, et le bot tient mieux le coup quand MyGES a des soucis.')
+        .setTitle(`🚀 Mise à jour ${BOT_VERSION} - "Tes années passées"`)
+        .setDescription('Retrouve tes notes, absences et supports de cours des années précédentes, et les étudiants de toutes tes promotions.')
         .setColor(0x5865f2)
         .setThumbnail(client.user?.displayAvatarURL() || null)
         .addFields(
             {
-                name: '🌐 Le panel étudiant',
+                name: '🗂️ Tes années passées',
                 value:
-                    '• **Rester connecté** : une case à cocher, à éviter sur un ordinateur partagé. Ton mot de passe n\'est jamais enregistré.\n' +
-                    '• Le **prochain examen** à l\'accueil, et l\'agenda s\'ouvre sur aujourd\'hui sur ton téléphone.\n' +
-                    '• Pages plus légères et plus rapides à charger.\n' +
-                    '• `/panel` te donne le lien. Service non officiel, sans lien avec MyGES ni le Réseau GES.' +
-                    (panelLink ? `\n• Accès : ${panelLink}` : ''),
+                    '• Dans le panel : un choix **Année** en haut de Notes, Absences et Documents. Pratique pour réviser avec les supports de l\'an dernier.\n' +
+                    '• Sur Discord : `/notes` et `/absences` ont une option `annee`.',
             },
             {
-                name: '🔔 Alertes plus fiables',
+                name: '👥 Annuaire',
                 value:
-                    '• Mot de passe changé sur MyGES : le bot te prévient une fois en MP et cesse d\'essayer, pour ne pas faire verrouiller ton compte.\n' +
-                    '• MyGES en panne : tes rappels de rendu partent quand même.\n' +
-                    '• Les projets encore en brouillon ne sont plus annoncés.',
+                    '• Les étudiants de **toutes tes promotions**, avec la promotion sous chaque nom.\n' +
+                    '• Toujours uniquement les personnes avec qui tu as été en classe.',
+            },
+            {
+                name: '🌐 Le panel étudiant',
+                value:
+                    '• `/panel` te donne le lien. Pages plus rapides à charger.\n' +
+                    '• Service non officiel, sans lien avec MyGES ni le Réseau GES.' +
+                    (panelLink ? `\n• Accès : ${panelLink}` : ''),
             },
             {
                 name: '✅ Aucune action requise',

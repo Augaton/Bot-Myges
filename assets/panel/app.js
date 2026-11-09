@@ -106,6 +106,7 @@ async function downloadFile(path, fileName, button, zone, status = button) {
 
 function showLogin(message = '') {
   clearCache();
+  schoolYear = '';
   const error = h('p', { class: 'field-error', role: 'alert', hidden: !message }, message);
   const username = h('input', { id: 'username', name: 'username', autocomplete: 'username', autocapitalize: 'none', spellcheck: 'false', required: true, maxlength: 100 });
   const password = h('input', { id: 'password', name: 'password', type: 'password', autocomplete: 'current-password', required: true, maxlength: 200 });
@@ -843,9 +844,32 @@ function semesterSummary(semester) {
     h('p', { class: 'muted small' }, progress));
 }
 
+// Année consultée dans Notes, Absences et Documents ; vide pour l'année en cours.
+let schoolYear = '';
+const yearLabel = (year) => `${year}-${Number(year) + 1}`;
+const withYear = (path) => (schoolYear ? `${path}?year=${schoolYear}` : path);
+
+/** Choix de l'année ; absent quand MyGES n'en connaît qu'une. */
+async function yearField() {
+  const { current, years } = await load('/api/annees').catch((e) => (e.status === 401 ? Promise.reject(e) : { current: '', years: [] }));
+  // Une liste connue qui ne contient plus l'année choisie : retour à l'année en cours.
+  // Une liste indisponible ne doit pas, elle, changer en silence l'année affichée.
+  if (schoolYear && years.length && !years.includes(schoolYear)) schoolYear = '';
+  if (years.length < 2) return schoolYear ? h('p', { class: 'muted small' }, `Année ${yearLabel(schoolYear)}`) : null;
+  const select = h('select', {
+    id: 'annee',
+    onchange: (e) => {
+      schoolYear = e.target.value === current ? '' : e.target.value;
+      render();
+    },
+  }, years.map((year) => h('option', { value: year, selected: year === (schoolYear || current) }, year === current ? `${yearLabel(year)} (en cours)` : yearLabel(year))));
+  return h('div', {}, h('label', { for: 'annee' }, 'Année'), select);
+}
+
 async function notesView() {
-  const semesters = await load('/api/notes');
-  if (!semesters.length) return empty('Aucune note pour le moment.');
+  const picker = await yearField();
+  const semesters = await load(withYear('/api/notes'));
+  if (!semesters.length) return [picker && h('div', { class: 'filters' }, picker), empty(schoolYear ? `Aucune note en ${yearLabel(schoolYear)}.` : 'Aucune note pour le moment.')];
 
   let selected = semesters.at(-1);
   const holder = h('div', { class: 'stack' });
@@ -869,7 +893,7 @@ async function notesView() {
     },
   }, Object.entries(NOTE_SORTS).map(([id, option]) => h('option', { value: id, selected: id === noteSort }, option.label)));
   show();
-  return [h('div', { class: 'filters' }, semesters.length > 1 && field('semestre', 'Période', period), field('tri', 'Trier par', sort)), holder];
+  return [h('div', { class: 'filters' }, picker, semesters.length > 1 && field('semestre', 'Période', period), field('tri', 'Trier par', sort)), holder];
 }
 
 const monthFormat = new Intl.DateTimeFormat('fr-FR', { ...paris, month: 'long', year: 'numeric' });
@@ -889,7 +913,7 @@ function filterChips(label, options, selected, onChange) {
 }
 
 function absenceHistory(items, total, unjustified) {
-  if (!total) return empty('Aucune absence enregistrée cette année.');
+  if (!total) return empty(schoolYear ? `Aucune absence enregistrée en ${yearLabel(schoolYear)}.` : 'Aucune absence enregistrée cette année.');
   const list = h('div', { class: 'stack' });
   const show = () => {
     const shown = absenceTab === 'toutes' ? items : items.filter((a) => !a.justified);
@@ -913,9 +937,11 @@ function absenceHistory(items, total, unjustified) {
 }
 
 async function absencesView() {
-  const { total, unjustified, lates, items, subjects } = await load('/api/absences');
+  const picker = await yearField();
+  const { total, unjustified, lates, items, subjects } = await load(withYear('/api/absences'));
   const stat = (value, label, danger) => h('div', {}, h('dd', { class: danger ? 'danger' : '' }, String(value)), h('dt', {}, label));
   return [
+    picker && h('div', { class: 'filters' }, picker),
     h('dl', { class: 'metrics stats' },
       stat(unjustified, 'Non justifiées', unjustified > 0),
       stat(total - unjustified, 'Justifiées'),
@@ -1132,19 +1158,20 @@ async function directoryView() {
     avatar(person),
     h('span', { class: 'directory-text' },
       h('span', { class: 'line name' }, person.name),
+      person.group && h('span', { class: 'line muted small' }, person.group),
       /^[^\s@]+@[^\s@]+$/.test(person.email ?? '') && h('a', { class: 'small', href: `mailto:${encodeURI(person.email)}` }, person.email)));
   const show = () => {
     const needle = query.trim().toLocaleLowerCase('fr');
     const pool = directoryTab === 'classe' ? classmates : teachers;
-    const found = pool.filter((person) => person.name.toLocaleLowerCase('fr').includes(needle));
+    const found = pool.filter((person) => `${person.name} ${person.group ?? ''}`.toLocaleLowerCase('fr').includes(needle));
     list.replaceChildren(...(found.length ? found.map(card) : [h('li', { class: 'muted' }, 'Personne ne correspond.')]));
   };
   show();
   const search = h('input', { id: 'recherche-annuaire', type: 'search', oninput: (e) => { query = e.target.value; show(); } });
   return [
     h('div', { class: 'filters' },
-      filterChips('Choisir une liste', [['classe', `Ma classe (${classmates.length})`], ['intervenants', `Intervenants (${teachers.length})`]], directoryTab, (id) => { directoryTab = id; show(); }),
-      h('div', { class: 'narrow-field' }, h('label', { for: 'recherche-annuaire' }, 'Chercher une personne'), search)),
+      filterChips('Choisir une liste', [['classe', `Étudiants (${classmates.length})`], ['intervenants', `Intervenants (${teachers.length})`]], directoryTab, (id) => { directoryTab = id; show(); }),
+      h('div', { class: 'narrow-field' }, h('label', { for: 'recherche-annuaire' }, 'Chercher une personne ou une promotion'), search)),
     list,
   ];
 }
@@ -1202,9 +1229,10 @@ let openFolder = '';
 const fileExtension = (file) => file.fileName.match(/\.([a-z0-9]{1,5})$/i)?.[1].toUpperCase() ?? 'Fichier';
 
 async function documentsView() {
-  const sources = await load('/api/documents');
+  const picker = await yearField();
+  const sources = await load(withYear('/api/documents'));
   // Tous les dossiers à la fois : leurs effectifs, les derniers ajouts et la recherche en ont besoin.
-  const folders = await Promise.all(sources.map(async (source) => ({ ...source, files: await load(`/api/documents/${source.id}`).catch((e) => (e.status === 401 ? Promise.reject(e) : null)) })));
+  const folders = await Promise.all(sources.map(async (source) => ({ ...source, files: await load(withYear(`/api/documents/${source.id}`)).catch((e) => (e.status === 401 ? Promise.reject(e) : null)) })));
   const explorer = h('div', { class: 'explorer' });
   const pane = h('div', { class: 'files stack' });
   const buttons = {};
@@ -1308,7 +1336,7 @@ async function documentsView() {
   const previous = folders.find((folder) => folder.id === openFolder);
   if (previous) showFolder(previous);
   else showRecent();
-  return explorer;
+  return [picker && h('div', { class: 'filters' }, picker), explorer];
 }
 
 // --- Démarrage ---

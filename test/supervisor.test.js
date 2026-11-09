@@ -21,7 +21,9 @@ function sandbox({ env = '', bot = "mark('start');", panel = "mark('start '+(pro
 
 const read = (dir, file) => (fs.existsSync(path.join(dir, file)) ? fs.readFileSync(path.join(dir, file), 'utf-8') : '');
 
-async function until(check, ms = 4_000) {
+// Large : quand toute la suite tourne en parallèle, une relance peut prendre plusieurs
+// secondes. On n'attend jamais plus que nécessaire : la boucle rend la main dès que c'est vrai.
+async function until(check, ms = 10_000) {
     const end = Date.now() + ms;
     while (Date.now() < end) {
         if (check()) return true;
@@ -30,12 +32,29 @@ async function until(check, ms = 4_000) {
     return false;
 }
 
+// Superviseurs encore en vie. Une assertion qui échoue avant l'arrêt laisserait le sien
+// tourner : le fichier de test ne se terminerait plus, et toute la suite resterait bloquée.
+const running = new Set();
+test.afterEach(async () => {
+    for (const child of running) {
+        const closed = new Promise((resolve) => child.once('close', resolve));
+        child.kill('SIGTERM'); // le superviseur arrête lui-même le bot et le panel
+        const timer = setTimeout(() => child.kill('SIGKILL'), 5_000);
+        await closed;
+        clearTimeout(timer);
+    }
+});
+
 function run(dir, extraEnv = {}) {
     const env = { ...process.env, ...extraEnv };
     delete env.PANEL_PORT;
     Object.assign(env, extraEnv);
     const child = spawn(process.execPath, [path.join(dir, 'index.js')], { cwd: dir, env, stdio: 'ignore' });
-    const exited = new Promise((resolve) => child.on('close', resolve));
+    running.add(child);
+    const exited = new Promise((resolve) => child.on('close', (code) => {
+        running.delete(child);
+        resolve(code);
+    }));
     return { child, exited };
 }
 

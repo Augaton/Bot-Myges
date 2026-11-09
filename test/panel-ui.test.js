@@ -547,8 +547,10 @@ test('panel qui redémarre : la réponse de nginx donne un message clair', async
     const page = browser();
     await page.settle();
     await page.signIn('redemarre', 'bon');
+    // Projets : sa première requête est la donnée elle-même (Notes demande d'abord la
+    // liste des années, facultative, dont l'échec n'empêche pas l'affichage).
     page.failNext(503, '<html>indisponible</html>');
-    await page.go('notes');
+    await page.go('projets');
     assert.match(page.alerts().join(), /Le panel redémarre/);
 });
 
@@ -565,8 +567,9 @@ test('annuaire et profil : listes, recherche, e-mail d\'intervenant, export de l
     await page.signIn('annuaire', 'bon');
 
     await page.go('annuaire');
-    assert.match(page.text(), /Ma classe \(2\)/);
+    assert.match(page.text(), /Étudiants \(2\)/);
     assert.match(page.text(), /Léa Martin/);
+    assert.match(page.text(), /Promo 2026/); // la promotion de l'étudiant est affichée
     const search = page.byId('recherche-annuaire');
     await search.fire('input', { target: { value: 'petit' } });
     assert.doesNotMatch(page.text(), /Léa Martin/);
@@ -1006,4 +1009,58 @@ test('menu Plus : se referme au contact du contenu', async (t) => {
     assert.strictEqual(plus.getAttribute('aria-expanded'), 'true');
     await page.byId('contenu').click();
     assert.strictEqual(plus.getAttribute('aria-expanded'), 'false');
+});
+
+test('années passées : sélecteur partagé entre écrans, notes de l\'année choisie, retour à l\'année en cours', async (t) => {
+    t.mock.method(console, 'log', () => {});
+    const { getCurrentYear } = dist('utils/schoolYear.js');
+    const current = Number(getCurrentYear());
+    const past = current - 1;
+    mygesMock([
+        ['/me/years', () => json(200, { result: [past, current] })],
+        [`/${past}/grades`, () => json(200, { result: [{ course: 'T1 - Ancienne matière', trimester_name: 'Semestre 1', average: 15, grades: [15] }] })],
+    ]);
+    const page = browser();
+    await page.settle();
+    await page.signIn('annees', 'bon');
+
+    await page.go('notes');
+    const select = page.byId('annee');
+    assert.ok(select, 'sélecteur présent');
+    assert.match(page.text(), new RegExp(`${current}-${current + 1} \\(en cours\\)`));
+    assert.match(page.text(), new RegExp(`${past}-${current}`));
+    assert.match(page.text(), /Réseaux/);
+
+    await select.fire('change', { target: { value: String(past) } });
+    await page.settle();
+    assert.match(page.text(), /Ancienne matière/);
+    assert.doesNotMatch(page.text(), /Réseaux/);
+
+    await page.go('absences');
+    assert.ok(page.requests.includes(`/api/absences?year=${past}`), page.requests.join(' '));
+    assert.ok(page.root.all((e) => e.tag === 'option' && e.attrs.value === String(past))[0].selected, 'année choisie conservée');
+
+    // Liste des années indisponible un instant : l'année choisie reste affichée, et dite.
+    vm.runInContext('clearCache()', page.context);
+    page.failNext(502, '<html>');
+    await page.go('notes');
+    assert.ok(page.requests.includes(`/api/notes?year=${past}`), page.requests.join(' '));
+    assert.match(page.text(), new RegExp(`Année ${past}-${current}`));
+
+    await page.go('absences');
+    await page.byId('annee').fire('change', { target: { value: String(current) } });
+    await page.settle();
+    assert.ok(page.requests.includes('/api/absences'), 'retour à l\'année en cours, sans paramètre');
+});
+
+test('années : pas de sélecteur quand MyGES n\'en connaît qu\'une', async (t) => {
+    t.mock.method(console, 'log', () => {});
+    const { getCurrentYear } = dist('utils/schoolYear.js');
+    mygesMock([['/me/years', () => json(200, { result: [Number(getCurrentYear())] })]]);
+    const page = browser();
+    await page.settle();
+    await page.signIn('premiere.annee', 'bon');
+    await page.go('notes');
+    assert.strictEqual(page.byId('annee'), undefined);
+    assert.match(page.text(), /Réseaux/);
 });
