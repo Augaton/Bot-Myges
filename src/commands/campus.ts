@@ -4,20 +4,14 @@ import { Command } from '../core/command';
 import { getTimetable } from '../core/mygesData';
 import { getSession, hasAccount } from '../core/store';
 import { CAMPUS_FILE } from '../config';
+import { BUILDINGS } from '../utils/campuses';
 import { addDays, startOfDay } from '../utils/datePicker';
 import { log, logError } from '../utils/logger';
 import { apiErrorMessage, noSessionMessage } from '../utils/replies';
 
-// Les adresses sont publiques ; les codes d'accès, eux, ne doivent pas figurer
-// dans le dépôt (il est public). Ils sont lus dans campus.json, hors dépôt :
-// voir campus.example.json pour le format.
-const CAMPUSES = [
-    { key: 'nation', name: '🏢 Nation 1 & 2', address: '242 Rue du Faubourg Saint-Antoine, 75012 Paris' },
-    { key: 'erard', name: '🏢 Erard', address: '21 Rue Erard, 75012 Paris' },
-    { key: 'voltaire1', name: '🎨 Voltaire 1 (Studio Crea)', address: '1 Rue Bouvier, 75011 Paris' },
-    { key: 'voltaire2', name: '📷 Voltaire 2 (Efet)', address: '1 Rue Bouvier, 75011 Paris' },
-    { key: 'rauch', name: '🏛️ Rauch', address: '15 Rue Rames, 75012 Paris' },
-];
+// Les adresses sont publiques (utils/campuses) ; les codes d'accès, eux, ne doivent
+// pas figurer dans le dépôt (il est public). Ils sont lus dans campus.json, hors
+// dépôt : voir campus.example.json pour le format.
 
 // Présence vérifiée sur 9 semaines autour d'aujourd'hui : un alternant peut ne pas
 // venir pendant plusieurs semaines, et c'est une durée que MyGes sert d'un seul coup.
@@ -90,9 +84,9 @@ const command: Command = {
             .setColor(0x3498db)
             .setThumbnail(interaction.client.user?.displayAvatarURL() || null)
             .addFields(
-                CAMPUSES.map((c) => ({
-                    name: c.name,
-                    value: `📍 *${c.address}*\n🔑 Code : ${codes[c.key] ? `**${codes[c.key]}**` : '*non renseigné*'}`,
+                BUILDINGS.map((b) => ({
+                    name: b.label,
+                    value: `📍 *${b.address}*\n🔑 Code : ${codes[b.code] ? `**${codes[b.code]}**` : '*non renseigné*'}`,
                 }))
             )
             .setFooter({ text: 'Gardez ces codes pour vous ! 🤫' })

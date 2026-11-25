@@ -7,6 +7,8 @@ import {
 import { commands, commandsJSON } from './core/registry';
 import { loadData, saveData, sessionCount, tightenPermissions } from './core/store';
 import { handleLoginModal, LOGIN_MODAL_ID } from './commands/login';
+import { FEED_PREFIX, handleFeedButton } from './commands/panel';
+import { handleHelpButton, HELP_NEWS_ID } from './commands/help';
 import { runProjectCheck } from './tasks/projects';
 import { PERSONAL_CHECK_INTERVAL, runPersonalCheck } from './tasks/personalAlerts';
 import { announceUpdateIfNeeded } from './tasks/announceUpdate';
@@ -229,6 +231,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
     // y compris celles qui n'ouvrent pas de collecteur.
     if (interaction.isButton() && interaction.customId === SHARE_ID) {
         await handleShare(interaction);
+        return;
+    }
+
+    // Boutons sans collecteur : abonnement d'agenda (/panel) et nouveautés (/help).
+    if (interaction.isButton() && interaction.customId.startsWith(FEED_PREFIX)) {
+        log('BOUTON', `${interaction.customId} par ${interaction.user.tag} (${interaction.user.id})`);
+        await handleFeedButton(interaction);
+        return;
+    }
+    if (interaction.isButton() && interaction.customId === HELP_NEWS_ID) {
+        await handleHelpButton(interaction);
         return;
     }
 

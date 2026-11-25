@@ -2,6 +2,7 @@
 // brute de MyGes. Tout est du texte : le navigateur l'insère sans l'interpréter.
 import { courseName, coursePlace, formatCampus, fullName, getNextStep, paragraphs, snippet } from '../utils/format';
 import { generalAverage, toSubject } from '../utils/grades';
+import { campusOf, CourseCampus, REMOTE_CAMPUS } from '../utils/campuses';
 
 // Très au-delà de ce qu'un étudiant peut avoir : une réponse démesurée n'occupe pas
 // le serveur, dont le thread principal sert tout le monde.
@@ -10,6 +11,12 @@ const collator = new Intl.Collator('fr', { numeric: true });
 
 const list = (raw: any): any[] => (Array.isArray(raw) ? raw.slice(0, MAX_ROWS) : []);
 
+/** Campus d'un cours, pour sa couleur et son adresse : celui de sa première salle. */
+function courseCampus(c: any, place: string): CourseCampus | null {
+    if (place === 'Distanciel') return REMOTE_CAMPUS;
+    return campusOf(String(list(c?.rooms)[0]?.campus ?? ''));
+}
+
 export function coursesView(raw: any) {
     const courses = [];
     for (const c of list(raw)) {
@@ -17,12 +24,14 @@ export function coursesView(raw: any) {
         const end = new Date(c?.end_date).getTime();
         if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
         const discipline = c?.discipline;
+        const place = coursePlace(c);
         courses.push({
             id: String(c?.reservation_id ?? start),
             name: courseName(c),
             start,
             end,
-            place: coursePlace(c),
+            place,
+            campus: courseCampus(c, place),
             teacher: String(c?.teacher ?? ''),
             type: String(c?.type ?? ''),
             modality: String(c?.modality ?? ''),

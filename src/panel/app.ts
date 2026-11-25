@@ -43,7 +43,7 @@ const DOWNLOAD_DEADLINE_MS = 5 * 60_000;
 
 const HEADERS = {
     'Content-Security-Policy':
-        "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; manifest-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+        "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; frame-src 'self'; manifest-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
     'Strict-Transport-Security': 'max-age=31536000',
     'X-Content-Type-Options': 'nosniff',
     'X-Frame-Options': 'DENY',
@@ -53,6 +53,21 @@ const HEADERS = {
     'Cross-Origin-Resource-Policy': 'same-origin',
     'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
 };
+
+// Aperçu d'un document dans le panel : PDF et images seulement, avec un type fixé
+// d'après l'extension. Jamais text/html ni SVG : un fichier déposé sur MyGes ne doit
+// pas pouvoir s'exécuter sur l'origine du panel, même ouvert seul dans un onglet.
+const PREVIEW_TYPES: Record<string, string> = {
+    pdf: 'application/pdf',
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    gif: 'image/gif',
+    webp: 'image/webp',
+};
+// Le lecteur PDF du navigateur a besoin d'object-src ; seul le panel peut l'encadrer.
+const PREVIEW_CSP = "default-src 'none'; object-src 'self'; frame-ancestors 'self'";
+const previewType = (name: string) => PREVIEW_TYPES[name.match(/\.([a-z0-9]{1,5})$/i)?.[1].toLowerCase() ?? ''];
 
 class HttpError extends Error {
     readonly status: number;
@@ -517,7 +532,7 @@ export function createPanel({ trustProxy, tls, sessionsFile, feedsDir }: { trust
 
     async function documents(session: Session, year: string) {
         const sources = courseSources(await read(session, (t) => getCourses(session.key, t, year)));
-        return [{ id: ANNUAL, name: 'Documents annuels', hint: 'Calendriers, informations générales…' }, ...sources];
+        return [{ id: ANNUAL, name: 'Documents annuels', hint: 'Calendriers, informations générales…', semester: '' }, ...sources];
     }
 
     async function documentFiles(session: Session, source: string, url: URL) {
@@ -529,8 +544,10 @@ export function createPanel({ trustProxy, tls, sessionsFile, feedsDir }: { trust
         return toDocuments(payload);
     }
 
-    async function sendFile(session: Session, url: URL, res: http.ServerResponse, fetchFile: (t: GesAuthenticationToken) => Promise<DownloadedFile>) {
+    async function sendFile(session: Session, url: URL, res: http.ServerResponse, fetchFile: (t: GesAuthenticationToken) => Promise<DownloadedFile>, preview = false) {
         if (res.destroyed) return; // client parti pendant une lecture préalable
+        // Aperçu d'un type non pris en charge : refusé avant de lire MyGes pour rien.
+        if (preview && !previewType(safeFileName(url.searchParams.get('name') || ''))) throw new HttpError(415, 'Pas d\'aperçu pour ce type de fichier.');
         const refused = acquireDownload(session.account);
         if (refused) throw new HttpError(429, refused);
 
@@ -552,6 +569,20 @@ export function createPanel({ trustProxy, tls, sessionsFile, feedsDir }: { trust
             // Toujours en pièce jointe et sans type interprétable : un fichier HTML
             // déposé sur MyGes ne s'exécute pas sur l'origine du panel.
             const name = safeFileName(fileName || url.searchParams.get('name') || 'document');
+            const type = preview && previewType(name);
+            if (preview && !type) throw new HttpError(415, 'Pas d\'aperçu pour ce type de fichier.');
+            if (type) {
+                res.writeHead(200, {
+                    ...HEADERS,
+                    'Content-Security-Policy': PREVIEW_CSP,
+                    'X-Frame-Options': 'SAMEORIGIN',
+                    'Content-Type': type,
+                    'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(name)}`,
+                    'Content-Length': data.length,
+                    'Cache-Control': 'no-store',
+                });
+                return void res.end(data);
+            }
             res.writeHead(200, {
                 ...HEADERS,
                 'Content-Type': 'application/octet-stream',
@@ -700,7 +731,7 @@ export function createPanel({ trustProxy, tls, sessionsFile, feedsDir }: { trust
             const [, source, id] = fileRoute;
             return sendFile(session(), url, res, (t) => (source === ANNUAL
                 ? DocumentService.downloadAnnualDocument(t, id, MAX_FILE_BYTES)
-                : DocumentService.downloadCourseFile(t, source, id, MAX_FILE_BYTES)));
+                : DocumentService.downloadCourseFile(t, source, id, MAX_FILE_BYTES)), url.searchParams.get('apercu') === '1');
         }
         const projectRoute = url.pathname.match(/^\/api\/projets\/([\w-]{1,40})(?:\/(consignes|depots)\/([\w-]{1,40}))?$/);
         if (projectRoute) {
@@ -728,7 +759,14 @@ export function createPanel({ trustProxy, tls, sessionsFile, feedsDir }: { trust
         route(req, res).catch((e) => {
             if (!(e instanceof HttpError)) logError('PANEL', 'Erreur inattendue :', e);
             if (res.headersSent) return void res.destroy();
-            sendJson(res, e instanceof HttpError ? e.status : 500, { error: e instanceof HttpError ? e.message : 'Erreur interne.' });
+            const status = e instanceof HttpError ? e.status : 500;
+            const message = e instanceof HttpError ? e.message : 'Erreur interne.';
+            // Un aperçu s'affiche dans un cadre : son erreur doit pouvoir s'y lire, en texte brut.
+            if (/[?&]apercu=1(?:&|$)/.test(req.url ?? '')) {
+                res.writeHead(status, { ...HEADERS, 'Content-Security-Policy': PREVIEW_CSP, 'X-Frame-Options': 'SAMEORIGIN', 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+                return void res.end(message);
+            }
+            sendJson(res, status, { error: message });
         });
     };
     const server = tls

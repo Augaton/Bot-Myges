@@ -18,7 +18,8 @@ const { encrypt } = dist('crypto.js');
 const { createPanel } = dist('panel/app.js');
 const { openFeed, sealFeed, newFeedSecret, feedId } = dist('utils/feedSeal.js');
 const { runFeedRefresh } = dist('tasks/agendaFeeds.js');
-const abonnement = dist('commands/abonnement.js').default;
+const { handleFeedButton } = dist('commands/panel.js');
+const panel = dist('commands/panel.js').default;
 const logout = dist('commands/logout.js').default;
 
 let courseName = 'Réseaux avancés';
@@ -41,19 +42,21 @@ function account(id) {
     store.openSession(id, { token_type: 'bearer', access_token: 't' });
 }
 
-/** Lance /abonnement ; renvoie le lien affiché, ou le texte de la réponse. */
-async function run(userId, action = null) {
+/** Clique sur un bouton d'abonnement de /panel ; renvoie le lien affiché, ou le texte de la réponse. */
+async function run(userId, action = 'lien') {
     const replies = [];
-    await abonnement.execute({
+    await handleFeedButton({
+        customId: `feed:${action}`,
         user: { id: userId },
-        options: { getString: (name) => (name === 'action' ? action : null) },
+        reply: async (reply) => replies.push(reply),
         deferReply: async () => {},
         editReply: async (reply) => replies.push(reply),
     });
     const reply = replies.at(-1);
     if (typeof reply === 'string') return { text: reply };
     const link = reply.embeds[0].data.description.match(/https:\/\/\S+\/agenda\/([A-Za-z0-9_-]{43})\.ics/);
-    return { link: link[0], secret: link[1], text: reply.embeds[0].data.description };
+    const buttons = reply.components?.[0]?.toJSON().components.map((b) => b.custom_id);
+    return { link: link[0], secret: link[1], text: reply.embeds[0].data.description, buttons };
 }
 
 let server;
@@ -91,13 +94,14 @@ test('chiffrement : lisible avec le bon secret seulement, et pas une fois modifi
     assert.match(secret, /^[A-Za-z0-9_-]{43}$/);
 });
 
-test('/abonnement : lien créé, fichier sans rien de lisible, calendrier servi par le panel', async (t) => {
+test('abonnement (/panel) : lien créé, fichier sans rien de lisible, calendrier servi par le panel', async (t) => {
     quiet(t);
     kordis();
     process.env.PANEL_PUBLIC_URL = 'https://exemple.test:8443/';
     account('abo');
-    const { link, secret } = await run('abo');
+    const { link, secret, buttons } = await run('abo');
     assert.strictEqual(link, `https://exemple.test:8443/agenda/${secret}.ics`); // sans double barre
+    assert.deepStrictEqual(buttons, ['feed:nouveau', 'feed:supprimer']);
 
     const file = path.join(FEEDS, `${crypto.createHash('sha256').update(secret).digest('hex')}.json`);
     const raw = fs.readFileSync(file, 'utf-8');
@@ -176,6 +180,26 @@ test('sans adresse publique du panel : aucun lien créé', async (t) => {
     try {
         assert.match((await run('sans-adresse')).text, /PANEL_PUBLIC_URL/);
         assert.strictEqual(store.loadData().feeds?.['sans-adresse'], undefined);
+    } finally {
+        process.env.PANEL_PUBLIC_URL = saved;
+    }
+});
+
+test('/panel : lien du panel et bouton d\'abonnement, visibles par l\'étudiant seul ; bouton inconnu ignoré', async () => {
+    const saved = process.env.PANEL_PUBLIC_URL;
+    process.env.PANEL_PUBLIC_URL = 'https://exemple.test:8443';
+    try {
+        const replies = [];
+        await panel.execute({ reply: async (r) => replies.push(r) });
+        const reply = replies.at(-1);
+        assert.ok(reply.flags);
+        assert.match(reply.embeds[0].data.description, /https:\/\/exemple\.test:8443/);
+        assert.deepStrictEqual(reply.components[0].toJSON().components.map((b) => b.custom_id), ['feed:lien']);
+
+        const touched = [];
+        const spy = async (r) => touched.push(r);
+        await handleFeedButton({ customId: 'feed:autre', user: { id: 'abo' }, reply: spy, deferReply: spy, editReply: spy });
+        assert.deepStrictEqual(touched, []);
     } finally {
         process.env.PANEL_PUBLIC_URL = saved;
     }

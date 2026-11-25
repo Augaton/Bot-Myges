@@ -114,13 +114,6 @@ test('partage : limité en fréquence', async (t) => {
     assert.deepStrictEqual(results, [1, 1, 1, 0, 0]);
 });
 
-test('/trombi et /profs ne proposent plus de publier la fiche d\'une personne', () => {
-    for (const file of ['trombi', 'profs']) {
-        const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'commands', `${file}.ts`), 'utf-8');
-        assert.doesNotMatch(source, /shareRow|SHARE_ID/, file);
-    }
-});
-
 test('clics : au-delà du seuil, l\'action est refusée et l\'utilisateur prévenu', async () => {
     const { tooManyClicks } = dist('utils/collector.js');
     const replies = [];

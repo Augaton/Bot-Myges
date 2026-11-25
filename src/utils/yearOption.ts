@@ -1,4 +1,4 @@
-// Option « annee » des commandes /notes et /absences : seulement les années de l'étudiant.
+// Option « annee » de la commande /notes : seulement les années de l'étudiant.
 import { AutocompleteInteraction, ChatInputCommandInteraction, SlashCommandStringOption } from 'discord.js';
 import { getCurrentYearFor, getYears } from '../core/mygesData';
 import { getSession } from '../core/store';

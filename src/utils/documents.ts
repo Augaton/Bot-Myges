@@ -26,6 +26,8 @@ export interface DocumentSource {
     id: string;
     name: string;
     hint: string;
+    /** Semestre de la matière, pour ranger les dossiers ; vide si MyGes ne le donne pas. */
+    semester: string;
 }
 
 export interface MygesDocument {
@@ -45,7 +47,12 @@ export function courseSources(raw: any): DocumentSource[] {
         // MyGes dit quelles matières n'ont aucun document : inutile de les proposer.
         if (id == null || byId.has(String(id)) || c?.has_documents === false) continue;
         byId.set(String(id), {
-            source: { id: String(id), name: courseName(c), hint: String(c?.trimester || c?.trimester_name || c?.teacher || '') },
+            source: {
+                id: String(id),
+                name: courseName(c),
+                hint: String(c?.trimester || c?.trimester_name || c?.teacher || ''),
+                semester: String(c?.trimester || c?.trimester_name || ''),
+            },
             hasDocuments: c?.has_documents === true,
         });
     }

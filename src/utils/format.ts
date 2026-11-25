@@ -50,15 +50,6 @@ export function paragraphs(raw: unknown, max = 1_000): string {
     return clip(clean, max);
 }
 
-/**
- * Tri alphabétique par nom de famille, tolérant aux champs manquants : l'API
- * MyGes renvoie parfois un `lastname` absent, ce qui faisait échouer toute la
- * commande sur un `localeCompare` de `undefined`.
- */
-export function byLastName(a: any, b: any): number {
-    return String(a?.lastname ?? '').localeCompare(String(b?.lastname ?? ''), 'fr');
-}
-
 /** Nom affichable d'une personne, jamais vide (Discord refuse les champs vides). */
 export function fullName(p: any): string {
     const name = [p?.firstname, p?.lastname].filter(Boolean).join(' ').trim();
@@ -84,14 +75,6 @@ export function coursePlace(raw: any): string {
     if (!names) return '';
     const campus = formatCampus(rooms[0]?.campus || '');
     return campus ? `${names} (${campus})` : names;
-}
-
-export function formatToFrenchTime(date: Date): string {
-    return date.toLocaleTimeString('fr-FR', {
-        hour: '2-digit',
-        minute: '2-digit',
-        timeZone: 'Europe/Paris',
-    });
 }
 
 // --- Trouver la prochaine étape d'un projet ---

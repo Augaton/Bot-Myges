@@ -84,6 +84,13 @@ async function load(path) {
 }
 
 /** Télécharge un fichier depuis un bouton ; une erreur s'affiche dans `zone`. */
+/** Remet un fichier déjà en mémoire au navigateur, qui l'enregistre. */
+function saveBlob(blob, fileName) {
+  const url = URL.createObjectURL(blob);
+  h('a', { href: url, download: fileName }).click();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
 async function downloadFile(path, fileName, button, zone, status = button) {
   const label = status.textContent;
   button.disabled = true;
@@ -91,9 +98,7 @@ async function downloadFile(path, fileName, button, zone, status = button) {
   zone.querySelector('[role="alert"]')?.remove();
   try {
     const res = await api(`${path}${path.includes('?') ? '&' : '?'}name=${encodeURIComponent(fileName)}`);
-    const url = URL.createObjectURL(await res.blob());
-    h('a', { href: url, download: fileName }).click();
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    saveBlob(await res.blob(), fileName);
   } catch (e) {
     if (e.status !== 401) {
       const notice = h('p', { class: 'field-error', role: 'alert' }, e.message);
@@ -181,8 +186,6 @@ let currentView = '';
 let currentPage = '';
 // Position de défilement de chaque page : deux projets n'ont pas la même.
 const scrolls = {};
-// Partie de l'écran à montrer à la première visite d'une page, choisie par sa vue.
-let scrollTarget = null;
 
 const setMenu = (open) => plus?.setAttribute('aria-expanded', String(open));
 
@@ -283,8 +286,6 @@ async function render() {
     const saved = scrolls[currentPage];
     window.scrollTo(0, saved ?? 0);
     title.focus({ preventScroll: true });
-    if (saved === undefined) scrollTarget?.scrollIntoView({ block: 'start' });
-    scrollTarget = null;
   } catch (e) {
     clearTimeout(waiting);
     if (current !== renderId || e.status === 401) return;
@@ -304,7 +305,7 @@ function courseRow(c, now = Date.now()) {
     h('span', { class: 'time' }, h('span', { class: 'line' }, time(c.start)), h('span', { class: 'line muted small' }, time(c.end))),
     h('span', { class: 'grow' },
       h('span', { class: 'line name' }, c.name),
-      c.place && h('span', { class: 'line small' }, c.place),
+      c.place && h('span', { class: 'line small' }, c.campus && swatch(c.campus), c.place),
       c.teacher && h('span', { class: 'line muted small' }, c.teacher)),
     live ? h('span', { class: 'tag' }, 'En cours') : c.type === 'Examen' && h('span', { class: 'tag' }, 'Examen')));
 }
@@ -337,9 +338,36 @@ function duration(ms) {
   return `${hours ? `${hours} h ` : ''}${total % 60 ? `${total % 60} min` : ''}`.trim();
 }
 
+/** Pastille de couleur d'un campus. Le nom est toujours écrit à côté : la couleur n'est qu'un repère. */
+const swatch = (campus) => h('span', { class: `swatch c-${campus.key}`, 'aria-hidden': 'true' });
+
+const mapsSearch = (address) => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
+const mapsRoute = (address) => `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(address)}`;
+
+/** Carte du campus d'un cours : son nom, son adresse, l'itinéraire. */
+function campusCard(campus) {
+  const copy = h('button', {
+    type: 'button',
+    onclick: async () => {
+      try {
+        await navigator.clipboard.writeText(campus.address);
+        copy.textContent = 'Adresse copiée';
+      } catch {
+        copy.textContent = 'Copie impossible';
+      }
+    },
+  }, 'Copier l\'adresse');
+  return h('div', { class: `campus-card c-${campus.key}` },
+    h('p', { class: 'campus-name' }, swatch(campus), campus.name),
+    campus.address && h('p', { class: 'small' }, campus.address),
+    campus.address && h('div', { class: 'toolbar' },
+      h('a', { class: 'button primary-link', href: mapsRoute(campus.address), target: '_blank', rel: 'noopener' }, 'Itinéraire'),
+      copy));
+}
+
 function showCourse(c) {
   const rooms = c.rooms?.filter((r) => r.name) ?? [];
-  const { dialog, body } = showDialog(c.name, facts([
+  const { dialog, body } = showDialog(c.name, c.campus && campusCard(c.campus), facts([
     ['Date', day(c.start)],
     ['Horaire', `${time(c.start)} à ${time(c.end)} (${duration(c.end - c.start)})`],
     ['Lieu', c.place],
@@ -397,13 +425,15 @@ function relative(date) {
 /** Barre d'avancement. Le nombre d'étapes est toujours écrit à côté. */
 const progressBar = (done, total) => withVars(h('span', { class: 'bar plain', 'aria-hidden': 'true' }, h('span', { class: 'bar-fill' })), { '--value': total ? done / total : 0 });
 
+const stepsPassed = (p) => `${p.stepsDone} ${p.stepsDone > 1 ? 'étapes passées' : 'étape passée'} sur ${p.stepsTotal}`;
+
 function deadlineRow(p) {
   const soon = p.date !== null && p.date - Date.now() <= 3 * DAY;
   return h('li', {}, h('a', { class: 'course', href: `#projet/${p.id}` },
     h('span', { class: 'grow' },
       h('span', { class: 'line name' }, p.practical && h('span', { class: 'tag' }, 'TP'), p.practical && ' ', p.name),
       p.course && h('span', { class: 'line small muted' }, p.course),
-      p.date !== null && p.stepsTotal > 0 && h('span', { class: 'line muted small' }, `Étape ${p.stepsDone} sur ${p.stepsTotal}`),
+      p.date !== null && p.stepsTotal > 0 && h('span', { class: 'line muted small' }, stepsPassed(p)),
       p.date !== null && p.stepsTotal > 0 && progressBar(p.stepsDone, p.stepsTotal),
       p.date !== null && p.group === null && h('span', { class: 'line small danger' }, 'Pas encore de groupe')),
     h('span', { class: 'end small' },
@@ -417,14 +447,14 @@ function projectCard(p) {
   const soon = p.date - Date.now() <= 3 * DAY;
   return h('li', {}, h('a', { class: 'project-card', href: `#projet/${p.id}` },
     h('span', { class: 'card-top small' },
-      h('span', { class: 'muted' }, p.practical ? 'Travail pratique' : 'Projet'),
-      h('span', { class: soon ? 'danger' : '' }, capitalize(relative(p.date)))),
+      h('span', { class: 'kind' }, p.practical ? 'TP' : 'Projet'),
+      h('span', { class: `due${soon ? ' soon' : ''}` }, capitalize(relative(p.date)))),
     h('span', { class: 'card-title' }, p.name),
     p.course && h('span', { class: 'card-course muted small' }, p.course),
     h('span', { class: 'card-foot' },
-      p.stepsTotal > 0 && h('span', { class: 'line small' }, `Étape ${p.stepsDone} sur ${p.stepsTotal}`),
+      h('span', { class: 'line small' }, `${p.type}, ${deadline(p.date)}`),
       p.stepsTotal > 0 && progressBar(p.stepsDone, p.stepsTotal),
-      h('span', { class: 'line small muted' }, `${p.type}, ${deadline(p.date)}`),
+      p.stepsTotal > 0 && h('span', { class: 'line small muted' }, stepsPassed(p)),
       p.group === null
         ? h('span', { class: 'line small danger' }, 'Pas encore de groupe')
         : h('span', { class: 'line small muted' }, p.group))));
@@ -629,7 +659,7 @@ function agendaExport() {
   zone.append(
     h('h2', {}, 'Dans ton calendrier'),
     h('p', { class: 'muted small body-text' }, 'Les 12 prochaines semaines, à importer dans Google Agenda ou le calendrier de ton téléphone. C\'est une copie : réimporte-la si ton agenda change.'),
-    h('p', { class: 'muted small body-text' }, 'Pour un calendrier qui se met à jour tout seul : la commande /abonnement sur Discord.'),
+    h('p', { class: 'muted small body-text' }, 'Pour un calendrier qui se met à jour tout seul : la commande /panel sur Discord, bouton « Mon lien d\'abonnement ».'),
     h('div', { class: 'toolbar' }, button));
   return zone;
 }
@@ -659,13 +689,8 @@ async function weekView() {
     !days.size && h('div', { class: 'toolbar' },
       h('p', { class: 'muted' }, 'Aucun cours cette semaine.'),
       data.next && h('button', { type: 'button', onclick: () => goToWeek(isoFormat.format(data.next)) }, `Prochain cours : ${shortFormat.format(data.next)}`)),
+    campusLegend(data.courses),
     weekGrid(data, days),
-    days.size > 0 && h('div', { class: 'only-narrow stack' }, [...days].map(([key, courses]) => {
-      const isToday = key === isoFormat.format(Date.now());
-      const block = section(isToday ? 'Aujourd\'hui' : day(courses[0].start), h('ul', { class: 'rows' }, courses.map((c) => courseRow(c))));
-      if (isToday) scrollTarget = block;
-      return block;
-    })),
   ];
   return [
     section(`Semaine du ${shortFormat.format(data.start + DAY / 2)} au ${shortFormat.format(data.start + 6 * DAY + DAY / 2)}`,
@@ -722,7 +747,21 @@ const MIN_SCALE = 0.8;
 const MAX_SCALE = 1.5;
 const READABLE_HEIGHT = 90; // deux lignes de nom, l'horaire et la salle
 
-/** Grille de la semaine, pour les grands écrans : une colonne par jour, cours placés selon l'heure. */
+/** Campus de la semaine, dans l'ordre où ils apparaissent : nom, et adresse vers le plan. */
+function campusLegend(courses) {
+  const seen = new Map();
+  for (const c of courses) if (c.campus && !seen.has(c.campus.key + c.campus.name)) seen.set(c.campus.key + c.campus.name, c.campus);
+  if (!seen.size) return null;
+  return h('ul', { class: 'campus-legend', 'aria-label': 'Campus de la semaine' }, [...seen.values()].map((campus) => h('li', {},
+    swatch(campus),
+    h('span', {},
+      h('span', { class: 'campus-name' }, campus.name),
+      campus.address
+        ? h('a', { class: 'campus-address', href: mapsSearch(campus.address), target: '_blank', rel: 'noopener' }, campus.address)
+        : campus.key === 'distanciel' && h('span', { class: 'campus-address muted' }, 'En ligne')))));
+}
+
+/** Grille de la semaine, à toutes les largeurs : une colonne par jour, cours placés selon l'heure. */
 function weekGrid(data, days) {
   const noon = (i) => data.start + i * DAY + DAY / 2;
   const keys = Array.from({ length: 7 }, (_, i) => isoFormat.format(noon(i)));
@@ -741,14 +780,14 @@ function weekGrid(data, days) {
   const block = ({ course: c, lane, lanes }) => withVars(
     h('button', {
       type: 'button',
-      class: `event${c.type === 'Examen' ? ' exam' : ''}${c.place === 'Distanciel' ? ' remote' : ''}`,
+      class: `event${c.campus ? ` c-${c.campus.key}` : ''}${c.type === 'Examen' ? ' exam' : ''}${c.place === 'Distanciel' ? ' remote' : ''}`,
       title: [c.name, c.place, c.teacher].filter(Boolean).join(', '),
       onclick: () => showCourse(c),
     },
+    c.type === 'Examen' && h('span', { class: 'exam-tag' }, 'Examen'),
     h('span', { class: 'name' }, c.name),
     h('span', { class: 'meta hours' }, `${time(c.start)} à ${time(c.end)}`),
-    c.place && h('span', { class: 'meta place' }, c.place),
-    c.type === 'Examen' && h('span', { class: 'meta' }, 'Examen')),
+    whereLine(c)),
     { '--start': minutes(c.start) - first * 60, '--length': (c.end - c.start) / 60_000, '--lane': lane, '--lanes': lanes },
   );
 
@@ -757,12 +796,21 @@ function weekGrid(data, days) {
     key === today && nowMinutes >= first * 60 && nowMinutes <= last * 60
       && withVars(h('div', { class: 'now', 'aria-hidden': 'true' }), { '--start': nowMinutes - first * 60 }));
 
-  return withVars(h('div', { class: 'only-wide week' },
+  return withVars(h('div', { class: 'week' },
     h('div'),
     shown.map(({ key, i }) => h('div', { class: 'week-head', 'aria-current': key === today ? 'date' : null }, capitalize(weekdayFormat.format(noon(i))))),
     h('div', { class: 'week-hours' }, hours.map((hour) => h('div', { class: 'small muted num' }, `${hour} h`))),
     shown.map(column)),
   { '--days': shown.length, '--hours': hours.length, '--scale': scale });
+}
+
+/** Où a lieu un cours : le campus, en couleur, puis la salle (masquée quand la place manque). */
+function whereLine(c) {
+  const rooms = (c.rooms ?? []).map((r) => r.name).filter(Boolean).join(', ');
+  if (!c.campus) return c.place && h('span', { class: 'meta where' }, c.place);
+  return h('span', { class: 'meta where' },
+    h('span', { class: 'campus-name' }, c.campus.name),
+    rooms && c.campus.key !== 'distanciel' ? h('span', { class: 'room' }, ` · ${rooms}`) : null);
 }
 
 const gradeText = (v) => String(v).replace('.', ',');
@@ -777,13 +825,13 @@ function gradeBar(value, provisional) {
 }
 
 const NOTE_SORTS = {
+  basse: { label: 'Moyennes les plus basses', compare: (a, b) => (subjectValue(a) ?? 21) - (subjectValue(b) ?? 21) },
   matiere: { label: 'Matière, de A à Z', compare: (a, b) => a.name.localeCompare(b.name, 'fr') },
   haute: { label: 'Meilleures moyennes', compare: (a, b) => (subjectValue(b) ?? -1) - (subjectValue(a) ?? -1) },
-  basse: { label: 'Moyennes les plus basses', compare: (a, b) => (subjectValue(a) ?? 21) - (subjectValue(b) ?? 21) },
   ects: { label: 'Plus de crédits ECTS', compare: (a, b) => (b.ects ?? 0) - (a.ects ?? 0) },
 };
 
-let noteSort = 'matiere';
+let noteSort = 'basse';
 
 function showSubject(subject) {
   const { dialog, body } = showDialog(subject.name, facts([
@@ -802,51 +850,72 @@ function showSubject(subject) {
   if (subject.rcId) addCourseExtras(subject.rcId, dialog, body, schoolYear);
 }
 
+/** Une matière : ses notes en pastilles (l'examen à part), sa moyenne et sa barre sur 20. */
 function subjectRow(subject) {
   const value = subjectValue(subject);
   const provisional = subject.average === null;
-  return h('li', {}, h('button', { type: 'button', class: 'course', onclick: () => showSubject(subject) },
-    h('span', { class: 'grow' },
-      h('span', { class: 'line name' }, subject.name),
-      subject.teacher && h('span', { class: 'line muted small' }, subject.teacher),
-      subject.notes.length > 0 && h('span', { class: 'line small num' }, `Notes : ${subject.notes.map(gradeText).join(' ; ')}`),
-      value !== null && gradeBar(value, provisional)),
-    h('span', { class: 'end num' },
-      h('span', { class: 'line name' }, value === null ? 'Pas de note' : grade(value)),
-      value !== null && provisional && h('span', { class: 'line muted small' }, 'Provisoire'))));
+  return h('li', {}, h('button', { type: 'button', class: 'subject', onclick: () => showSubject(subject) },
+    h('span', { class: 'subject-name' },
+      h('span', { class: 'name' }, subject.name),
+      subject.teacher && h('span', { class: 'muted small' }, subject.teacher)),
+    h('span', { class: 'subject-marks' },
+      subject.notes.map((note) => h('span', { class: 'pill' }, gradeText(note))),
+      subject.exam && h('span', { class: 'pill exam' }, `Exam. ${gradeText(subject.exam)}`),
+      !subject.notes.length && !subject.exam && h('span', { class: 'muted small' }, 'Pas encore de note')),
+    h('span', { class: 'subject-average' },
+      h('span', { class: `name num${value !== null && value < 10 ? ' danger' : ''}` }, value === null ? 'Pas de note' : grade(value)),
+      value !== null && gradeBar(value, provisional),
+      value !== null && provisional && h('span', { class: 'muted small' }, 'provisoire')),
+    h('span', { class: 'subject-ects num' }, subject.ects === null ? '' : String(subject.ects))));
 }
 
-function gradesTable(subjects) {
-  const line = (subject) => {
-    const value = subjectValue(subject);
-    const provisional = subject.average === null;
-    return h('tr', {},
-      h('th', { scope: 'row' },
-        h('button', { type: 'button', class: 'link', onclick: () => showSubject(subject) }, subject.name),
-        subject.teacher && h('div', { class: 'muted small' }, subject.teacher)),
-      h('td', { class: 'num' }, subject.notes.map(gradeText).join(' ; ')),
-      h('td', { class: 'num' }, subject.exam ? gradeText(subject.exam) : ''),
-      h('td', { class: 'num average' },
-        value !== null && h('div', {}, grade(value), provisional && h('span', { class: 'muted small' }, ' provisoire')),
-        value !== null && gradeBar(value, provisional)),
-      h('td', { class: 'num end' }, subject.ects === null ? '' : String(subject.ects)),
-      h('td', { class: 'num end' }, subject.absences ? String(subject.absences) : ''));
-  };
-  return h('div', { class: 'only-wide table-frame' }, h('table', {},
-    h('thead', {}, h('tr', {}, ['Matière', 'Notes', 'Examen', 'Moyenne', 'ECTS', 'Absences'].map((label) => h('th', { scope: 'col' }, label)))),
-    h('tbody', {}, subjects.map(line))));
+const subjectList = (subjects) => h('ul', { class: 'subjects' },
+  h('li', { class: 'subjects-head', 'aria-hidden': 'true' }, h('span', {}, 'Matière'), h('span', {}, 'Notes'), h('span', {}, 'Moyenne'), h('span', { class: 'num' }, 'ECTS')),
+  subjects.map(subjectRow));
+
+/**
+ * Toutes les moyennes sur une frise de 0 à 20, repère à 10 : on voit d'un coup d'œil
+ * où l'on se situe. Les valeurs sont écrites dans la liste dessous : la frise n'est
+ * qu'un résumé visuel, masqué aux lecteurs d'écran.
+ */
+function averageStrip(rated, general) {
+  // Moyennes proches : sur des rangées voisines, au lieu de se recouvrir.
+  const rows = [0, -1, 1, -2, 2];
+  const lastOnRow = new Map();
+  const dots = [...rated].sort((a, b) => a.value - b.value).map(({ subject, value }) => {
+    const row = rows.find((r) => !lastOnRow.has(r) || value - lastOnRow.get(r) >= 0.6) ?? 0;
+    lastOnRow.set(row, value);
+    const state = `${value < 10 ? ' low' : ''}${subject.average === null ? ' provisional' : ''}`;
+    return withVars(h('span', { class: `dot${state}`, title: `${subject.name}, ${grade(value)}` }), { '--value': Math.min(value, 20) / 20, '--row': row });
+  });
+  return h('figure', { class: 'strip' },
+    h('figcaption', { class: 'muted small' }, rated.length > 1 ? `Tes ${rated.length} moyennes, sur 20` : 'Ta moyenne, sur 20'),
+    h('div', { class: 'strip-track', 'aria-hidden': 'true' },
+      h('span', { class: 'strip-ten' }),
+      withVars(h('span', { class: 'strip-general' }), { '--value': Math.min(general, 20) / 20 }),
+      dots),
+    h('div', { class: 'strip-scale', 'aria-hidden': 'true' }, h('span', {}, '0'), h('span', { class: 'ten' }, '10'), h('span', {}, '20')),
+    h('p', { class: 'strip-legend muted small', 'aria-hidden': 'true' },
+      h('span', {}, h('span', { class: 'dot' }), 'définitive'),
+      h('span', {}, h('span', { class: 'dot provisional' }), 'provisoire'),
+      h('span', {}, h('span', { class: 'dot low' }), 'sous 10'),
+      h('span', {}, h('span', { class: 'strip-general-key' }), 'ta moyenne')));
 }
 
+/** Résumé de la période : la moyenne, les matières sous 10, l'avancement, puis la frise. */
 function semesterSummary(semester) {
   const final = semester.average !== null;
   const value = final ? semester.average : semester.provisional;
-  const done = semester.subjects.filter((subject) => subject.average !== null).length;
-  const progress = `${done} matière${done > 1 ? 's' : ''} sur ${semester.subjects.length} avec une moyenne définitive`;
   if (value === null) return h('p', { class: 'muted' }, 'Pas encore de note sur cette période.');
-  return h('div', { class: 'summary' },
-    h('dl', { class: 'metrics' }, h('div', {}, h('dd', {}, grade(value)), h('dt', {}, final ? 'Moyenne générale' : 'Moyenne provisoire, contrôle continu'))),
-    gradeBar(value, !final),
-    h('p', { class: 'muted small' }, progress));
+  const rated = semester.subjects.map((subject) => ({ subject, value: subjectValue(subject) })).filter((item) => item.value !== null);
+  const low = rated.filter((item) => item.value < 10).length;
+  const done = semester.subjects.filter((subject) => subject.average !== null).length;
+  return h('section', { class: 'summary', 'aria-label': 'Résumé de la période' },
+    h('dl', { class: 'metrics' },
+      h('div', { class: 'main-metric' }, h('dd', {}, grade(value)), h('dt', {}, final ? 'Moyenne générale' : 'Moyenne provisoire, contrôle continu compris')),
+      h('div', {}, h('dd', { class: low ? 'danger' : '' }, String(low)), h('dt', {}, low > 1 ? 'matières sous 10' : 'matière sous 10')),
+      h('div', {}, h('dd', {}, `${done} sur ${semester.subjects.length}`), h('dt', {}, done > 1 ? 'moyennes définitives' : 'moyenne définitive'))),
+    averageStrip(rated, value));
 }
 
 // Année consultée dans Notes, Absences, Documents et Projets ; vide pour l'année en cours.
@@ -899,7 +968,14 @@ async function notesView() {
   const holder = h('div', { class: 'stack' });
   const show = () => {
     const subjects = [...selected.subjects].sort(NOTE_SORTS[noteSort].compare);
-    holder.replaceChildren(semesterSummary(selected), h('ul', { class: 'rows only-narrow' }, subjects.map(subjectRow)), gradesTable(subjects));
+    // Sous 10 : en tête, dans leur propre bloc, quel que soit le tri choisi.
+    const low = subjects.filter((subject) => subjectValue(subject) !== null && subjectValue(subject) < 10);
+    const others = subjects.filter((subject) => !low.includes(subject));
+    holder.replaceChildren(...[
+      semesterSummary(selected),
+      low.length > 0 && h('section', { class: 'stack' }, h('h2', { class: 'danger' }, `À surveiller (${low.length})`), subjectList(low)),
+      others.length > 0 && section(low.length ? `Les autres matières (${others.length})` : `Matières (${others.length})`, subjectList(others)),
+    ].filter(Boolean));
   };
   const field = (id, label, control) => h('div', {}, h('label', { for: id }, label), control);
   const period = h('select', {
@@ -981,6 +1057,45 @@ async function absencesView() {
   ];
 }
 
+const WEEK = 7 * DAY;
+const HORIZON = 30 * DAY;
+
+const PROJECT_FILTERS = {
+  tous: { label: 'Tous', match: () => true },
+  projets: { label: 'Projets', match: (p) => !p.practical },
+  tp: { label: 'TP', match: (p) => p.practical },
+  sansgroupe: { label: 'Sans groupe', match: (p) => p.group === null },
+};
+let projectFilter = 'tous';
+
+/** Projets en cours sans groupe : rappelés en tête, avec le chemin vers les équipes. */
+function noGroupNotice(projects) {
+  if (!projects.length) return null;
+  const single = projects.length === 1;
+  return h('div', { class: 'notice-danger', role: 'status' },
+    h('p', {}, h('strong', {}, 'Tu n\'es dans aucun groupe'), single ? ` pour ${projects[0].name}.` : ` pour ${projects.length} projets :`),
+    single
+      ? h('a', { class: 'button danger-link', href: `#projet/${projects[0].id}/equipes` }, 'Choisir une équipe')
+      : h('ul', { class: 'chips' }, projects.map((p) => h('li', {}, h('a', { class: 'button', href: `#projet/${p.id}/equipes` }, p.name)))));
+}
+
+/** Échéances des 30 prochains jours sur une frise : on voit les rendus qui se tassent. */
+function deadlineStrip(projects) {
+  const now = Date.now();
+  const soon = projects.filter((p) => p.date !== null && p.date - now <= HORIZON).sort((a, b) => a.date - b.date);
+  if (!soon.length) return null;
+  return section('Les 30 prochains jours',
+    h('ol', { class: 'deadline-strip' }, soon.map((p, i) => {
+      const value = Math.max(0, (p.date - now) / HORIZON);
+      const place = `${i % 2 ? 'below' : 'above'}${value > 0.7 ? ' end' : ''}${p.date - now <= 3 * DAY ? ' soon' : ''}`;
+      return withVars(h('li', { class: place },
+        h('a', { href: `#projet/${p.id}` },
+          h('span', { class: 'when' }, capitalize(deadline(p.date))),
+          h('span', { class: 'what' }, `${p.type} · ${p.name}`))),
+      { '--value': value });
+    })));
+}
+
 async function projectsView() {
   const picker = await yearField();
   const items = await load(withYear('/api/projets'));
@@ -989,25 +1104,71 @@ async function projectsView() {
   const running = items.filter((p) => p.date !== null);
   const finished = items.filter((p) => p.date === null);
   const holder = h('div', { class: 'column' });
-  const show = (query = '') => {
+  let query = '';
+  const show = () => {
     const needle = query.trim().toLocaleLowerCase('fr');
-    const match = (p) => `${p.name} ${p.course}`.toLocaleLowerCase('fr').includes(needle);
+    const match = (p) => PROJECT_FILTERS[projectFilter].match(p) && `${p.name} ${p.course}`.toLocaleLowerCase('fr').includes(needle);
     const active = running.filter(match);
     const done = finished.filter(match);
+    const now = Date.now();
+    const thisWeek = active.filter((p) => p.date - now < WEEK);
+    const later = active.filter((p) => p.date - now >= WEEK);
+    const grid = (list) => h('ul', { class: 'project-grid' }, list.map(projectCard));
     holder.replaceChildren(...[
-      section(`En cours (${active.length})`, active.length
-        ? h('ul', { class: 'project-grid' }, active.map(projectCard))
-        : empty(needle ? 'Aucun projet en cours ne correspond.' : 'Aucun projet en cours.')),
-      done.length > 0 && section(`Terminés (${done.length})`, h('ul', { class: 'rows' }, done.map(deadlineRow))),
+      thisWeek.length > 0 && section(`Cette semaine (${thisWeek.length})`, grid(thisWeek)),
+      later.length > 0 && section(`Plus tard (${later.length})`, grid(later)),
+      !active.length && empty(needle || projectFilter !== 'tous' ? 'Aucun projet en cours ne correspond.' : 'Aucun projet en cours.'),
+      done.length > 0 && h('details', { class: 'done' }, h('summary', {}, `Terminés (${done.length})`), h('ul', { class: 'rows' }, done.map(deadlineRow))),
     ].filter(Boolean));
   };
   show();
-  const search = h('input', { id: 'recherche-projet', type: 'search', oninput: (e) => show(e.target.value) });
+  const counts = (id) => items.filter((p) => PROJECT_FILTERS[id].match(p)).length;
+  const filters = Object.keys(PROJECT_FILTERS).filter((id) => id === 'tous' || counts(id) > 0);
+  const search = h('input', { id: 'recherche-projet', type: 'search', oninput: (e) => { query = e.target.value; show(); } });
+  // Une année passée se consulte seulement : ni rappel de groupe, ni échéances.
+  const current = !schoolYear;
   return [
-    picker && h('div', { class: 'filters' }, picker),
-    items.length > 5 && h('div', { class: 'narrow-field' }, h('label', { for: 'recherche-projet' }, 'Rechercher un projet'), search),
+    h('div', { class: 'team-tools' },
+      picker,
+      items.length > 5 && h('div', { class: 'narrow-field' }, h('label', { for: 'recherche-projet' }, 'Rechercher un projet'), search),
+      filters.length > 2 && filterChips('Filtrer les projets', filters.map((id) => [id, `${PROJECT_FILTERS[id].label} (${counts(id)})`]), projectFilter, (id) => { projectFilter = id; show(); })),
+    current && noGroupNotice(running.filter((p) => p.group === null)),
+    current && deadlineStrip(running),
     holder,
   ];
+}
+
+const icsStamp = (t) => new Date(t).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+const icsText = (text) => text.replace(/[\;,]/g, (c) => `\\${c}`).replace(/\r?\n/g, '\\n');
+// Lignes de plus de 75 caractères repliées, comme le veut le format.
+const icsFold = (line) => line.match(/.{1,70}/gu).join('\r\n ');
+
+/** Étape d'un projet en .ics : un événement à l'heure limite (ou sur la journée), rappel la veille. */
+function stepIcs(p, step) {
+  const summary = `${step.type} · ${p.name}`;
+  const day = isoFormat.format(step.date).replace(/-/g, '');
+  const nextDay = new Date(Date.parse(isoFormat.format(step.date)) + DAY).toISOString().slice(0, 10).replace(/-/g, '');
+  const when = hasTime(step.date)
+    ? [`DTSTART:${icsStamp(step.date)}`, `DTEND:${icsStamp(step.date)}`]
+    : [`DTSTART;VALUE=DATE:${day}`, `DTEND;VALUE=DATE:${nextDay}`];
+  return [
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Panel etudiant//FR', 'CALSCALE:GREGORIAN',
+    'BEGIN:VEVENT', `UID:projet-${p.id}-${step.date}@panel-etudiant`, `DTSTAMP:${icsStamp(Date.now())}`, ...when,
+    `SUMMARY:${icsText(summary)}`, p.course && `DESCRIPTION:${icsText(p.course)}`,
+    'BEGIN:VALARM', 'ACTION:DISPLAY', 'TRIGGER:-P1D', `DESCRIPTION:${icsText(summary)}`, 'END:VALARM',
+    'END:VEVENT', 'END:VCALENDAR',
+  ].filter(Boolean).map(icsFold).join('\r\n') + '\r\n';
+}
+
+const saveIcs = (p, step) => saveBlob(new Blob([stepIcs(p, step)], { type: 'text/calendar' }), 'echeance.ics');
+
+/** Bandeau de la prochaine étape d'un projet, à ajouter à son agenda d'un clic. */
+function nextStepBanner(p, step) {
+  return h('section', { class: 'next-step', 'aria-label': 'Prochaine étape' },
+    h('p', { class: 'eyebrow' }, `Prochaine étape, ${relative(step.date)}`),
+    h('p', { class: 'next-step-name' }, step.type),
+    h('p', {}, capitalize(deadline(step.date, dayFormat))),
+    h('div', { class: 'toolbar' }, h('button', { type: 'button', class: 'primary-inline', onclick: () => saveIcs(p, step) }, 'Ajouter à mon agenda')));
 }
 
 function stepState(step, nextDate) {
@@ -1147,7 +1308,9 @@ function projectInfoPage(p) {
     }).catch(() => {});
   }
 
-  return h('div', { class: 'project-page' },
+  // Une année passée se consulte seulement : pas d'étape à ajouter à son agenda.
+  const nextStep = !p.archived && p.steps.find((step) => step.date !== null && step.date === nextDate);
+  return h('div', { class: 'column' }, nextStep && nextStepBanner(p, nextStep), h('div', { class: 'project-page' },
     zone,
     h('div', { class: 'column' },
       section('Informations', facts([
@@ -1164,7 +1327,7 @@ function projectInfoPage(p) {
       p.activity.length > 0 && h('details', {}, h('summary', {}, `Activité du groupe (${p.activity.length})`),
         h('ul', { class: 'activity' }, p.activity.map((event) => h('li', {},
           h('span', { class: 'small' }, [event.author, event.text].filter(Boolean).join(' ')),
-          event.date && h('span', { class: 'muted small line' }, dateFormat.format(event.date))))))));
+          event.date && h('span', { class: 'muted small line' }, dateFormat.format(event.date)))))))));
 }
 
 async function projectView(title, id, tab) {
@@ -1296,10 +1459,181 @@ let openFolder = '';
 
 const fileExtension = (file) => file.fileName.match(/\.([a-z0-9]{1,5})$/i)?.[1].toUpperCase() ?? 'Fichier';
 
+const NEW_FOR = 7 * DAY;
+const isNew = (file) => file.date !== null && Date.now() - file.date < NEW_FOR;
+const extensionOf = (file) => file.fileName.match(/\.([a-z0-9]{1,5})$/i)?.[1].toLowerCase() ?? '';
+
+// Famille de chaque type, pour sa couleur. L'extension reste toujours écrite.
+const TYPE_TONES = {
+  pdf: 'pdf', ppt: 'slides', pptx: 'slides', odp: 'slides', key: 'slides', doc: 'doc', docx: 'doc', odt: 'doc', rtf: 'doc',
+  xls: 'sheet', xlsx: 'sheet', ods: 'sheet', csv: 'sheet', zip: 'archive', rar: 'archive', '7z': 'archive', gz: 'archive', tar: 'archive',
+  png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image',
+};
+const typeBadge = (file) => h('span', { class: `tag file-type t-${TYPE_TONES[extensionOf(file)] ?? 'other'}` }, fileExtension(file));
+
+const IMAGE_TYPES = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp']);
+const TEXT_TYPES = new Set(['txt', 'md', 'csv', 'tsv', 'log', 'sql', 'java', 'py', 'js', 'ts', 'c', 'h', 'cpp', 'hpp', 'cs', 'kt', 'php', 'rb', 'go', 'rs', 'sh', 'json', 'xml', 'html', 'css', 'yml', 'yaml']);
+const TEXT_PREVIEW_BYTES = 512 * 1024;
+
+/** Ce que l'aperçu sait montrer d'un fichier : pdf, image, text, zip, ou none. */
+function previewKind(file) {
+  const ext = extensionOf(file);
+  if (ext === 'pdf') return 'pdf';
+  if (IMAGE_TYPES.has(ext)) return 'image';
+  if (TEXT_TYPES.has(ext)) return 'text';
+  return ext === 'zip' ? 'zip' : 'none';
+}
+
+/** Noms des fichiers d'une archive ZIP, lus dans son répertoire central, sans rien décompresser. */
+function zipEntries(buffer) {
+  const view = new DataView(buffer);
+  // Fin du répertoire central : cherchée depuis la fin, derrière un commentaire de 64 Ko au plus.
+  let end = -1;
+  for (let i = buffer.byteLength - 22; i >= Math.max(0, buffer.byteLength - 22 - 65_535); i--) {
+    if (view.getUint32(i, true) === 0x06054b50) {
+      end = i;
+      break;
+    }
+  }
+  if (end < 0) throw new Error('Archive illisible.');
+  const count = view.getUint16(end + 10, true);
+  let offset = view.getUint32(end + 16, true);
+  const decoder = new TextDecoder();
+  const names = [];
+  for (let n = 0; n < count && offset + 46 <= buffer.byteLength && view.getUint32(offset, true) === 0x02014b50; n++) {
+    const nameLength = view.getUint16(offset + 28, true);
+    names.push(decoder.decode(new Uint8Array(buffer, offset + 46, Math.min(nameLength, buffer.byteLength - offset - 46))));
+    offset += 46 + nameLength + view.getUint16(offset + 30, true) + view.getUint16(offset + 32, true);
+  }
+  return names.filter((name) => !name.endsWith('/')); // les dossiers ne sont pas des fichiers
+}
+
+async function textPreview(blob) {
+  const cut = blob.size > TEXT_PREVIEW_BYTES;
+  const text = await (cut ? blob.slice(0, TEXT_PREVIEW_BYTES) : blob).text();
+  return h('div', { class: 'viewer-text' },
+    cut && h('p', { class: 'muted small' }, 'Aperçu des 500 premiers Ko : télécharge le fichier pour le lire en entier.'),
+    h('pre', {}, text));
+}
+
+function zipPreview(buffer) {
+  let names;
+  try {
+    names = zipEntries(buffer);
+  } catch {
+    return h('p', { class: 'viewer-empty' }, 'Archive illisible : télécharge-la pour l\'ouvrir.');
+  }
+  const shown = names.slice(0, 200);
+  return h('div', { class: 'viewer-text' },
+    h('p', { class: 'name' }, `${plural(names.length, 'fichier')} dans l'archive`),
+    h('ul', { class: 'zip-list' }, shown.map((name) => h('li', {}, name))),
+    names.length > shown.length && h('p', { class: 'muted small' }, `et ${names.length - shown.length} autres`),
+    h('p', { class: 'muted small' }, 'Pour les ouvrir, télécharge l\'archive.'));
+}
+
+const noPreview = (file) => h('div', { class: 'viewer-empty' },
+  typeBadge(file),
+  h('p', { class: 'name' }, 'Pas d\'aperçu pour ce fichier'),
+  h('p', { class: 'muted' }, 'Ton navigateur ne sait pas afficher ce type de fichier : télécharge-le pour l\'ouvrir.'));
+
+/**
+ * Visionneuse : PDF et images servis par le panel en aperçu, texte et archives lus ici,
+ * le reste proposé au téléchargement. ← → ou un balayage passent au fichier voisin de la
+ * liste, Échap ferme. Un fichier lu pour l'aperçu n'est pas redemandé pour l'enregistrer.
+ */
+function openViewer(items, index, opener) {
+  let current = index;
+  let cached = null;
+  let touch = null;
+  const title = h('h2', { id: 'viewer-title' });
+  const sub = h('p', { class: 'viewer-sub' });
+  const body = h('div', { class: 'viewer-body' });
+  const go = (step) => {
+    if (current + step < 0 || current + step >= items.length) return;
+    current += step;
+    show();
+  };
+  const prev = h('button', { type: 'button', class: 'icon', 'aria-label': 'Fichier précédent', onclick: () => go(-1) }, '‹');
+  const next = h('button', { type: 'button', class: 'icon', 'aria-label': 'Fichier suivant', onclick: () => go(1) }, '›');
+  const download = h('button', {
+    type: 'button',
+    class: 'primary-inline',
+    onclick: () => {
+      const { folder, file } = items[current];
+      if (cached?.file === file) return saveBlob(cached.blob, file.fileName);
+      return downloadFile(`/api/documents/${folder.id}/${file.id}`, file.fileName, download, body);
+    },
+  }, 'Télécharger');
+  const dialog = h('dialog', {
+    class: 'viewer',
+    'aria-labelledby': 'viewer-title',
+    onclose: () => {
+      dialog.remove();
+      opener?.focus();
+    },
+    onkeydown: (e) => {
+      if (e.key === 'ArrowLeft') go(-1);
+      if (e.key === 'ArrowRight') go(1);
+    },
+    ontouchstart: (e) => { touch = e.touches[0]; },
+    ontouchend: (e) => {
+      const end = e.changedTouches[0];
+      const dx = end.clientX - (touch?.clientX ?? end.clientX);
+      const dy = end.clientY - (touch?.clientY ?? end.clientY);
+      if (Math.abs(dx) > 70 && Math.abs(dx) > 2 * Math.abs(dy)) go(dx < 0 ? 1 : -1);
+    },
+  },
+  h('div', { class: 'viewer-head' },
+    h('button', { type: 'button', onclick: () => dialog.close() }, 'Fermer'),
+    h('div', { class: 'viewer-titles' }, title, sub),
+    items.length > 1 && prev,
+    items.length > 1 && next,
+    download),
+  body,
+  h('p', { class: 'viewer-hint' }, items.length > 1 ? '← → fichier précédent ou suivant · Échap pour fermer' : 'Échap pour fermer'));
+
+  const show = async () => {
+    const { folder, file } = items[current];
+    title.textContent = file.title;
+    sub.textContent = [folder.name, fileExtension(file), items.length > 1 && `fichier ${current + 1} sur ${items.length}`].filter(Boolean).join(' · ');
+    prev.disabled = current === 0;
+    next.disabled = current === items.length - 1;
+    dialog.querySelector('[role="alert"]')?.remove();
+    const named = `/api/documents/${folder.id}/${file.id}?name=${encodeURIComponent(file.fileName)}`;
+    const kind = previewKind(file);
+    if (kind === 'pdf') {
+      return body.replaceChildren(
+        h('iframe', { class: 'viewer-frame', src: `${named}&apercu=1`, title: `Aperçu de ${file.title}` }),
+        h('a', { class: 'small viewer-tab', href: `${named}&apercu=1`, target: '_blank', rel: 'noopener' }, 'Ouvrir dans un onglet'));
+    }
+    if (kind === 'image') {
+      const unavailable = () => body.replaceChildren(h('p', { class: 'viewer-empty' }, 'Aperçu indisponible pour le moment : télécharge le fichier.'));
+      return body.replaceChildren(h('img', { class: 'viewer-image', src: `${named}&apercu=1`, alt: file.title, onerror: unavailable }));
+    }
+    if (kind === 'none') return body.replaceChildren(noPreview(file));
+    body.replaceChildren(h('p', { class: 'viewer-empty muted' }, 'Chargement…'));
+    try {
+      const blob = await (await api(named)).blob();
+      if (items[current].file !== file || !dialog.isConnected) return; // un autre fichier entre-temps
+      cached = { file, blob };
+      body.replaceChildren(kind === 'text' ? await textPreview(blob) : zipPreview(await blob.arrayBuffer()));
+    } catch (e) {
+      if (e.status !== 401 && items[current].file === file) body.replaceChildren(h('p', { class: 'field-error', role: 'alert' }, e.message));
+    }
+  };
+  root.append(dialog);
+  dialog.showModal();
+  show();
+  return dialog;
+}
+
+const SEMESTERLESS = 'Autres matières';
+const ALL_YEAR = 'Toute l\'année';
+
 async function documentsView() {
   const picker = await yearField();
   const sources = await load(withYear('/api/documents'));
-  // Tous les dossiers à la fois : leurs effectifs, les derniers ajouts et la recherche en ont besoin.
+  // Tous les dossiers à la fois : leurs effectifs, les nouveautés et la recherche en ont besoin.
   const folders = await Promise.all(sources.map(async (source) => ({ ...source, files: await load(withYear(`/api/documents/${source.id}`)).catch((e) => (e.status === 401 ? Promise.reject(e) : null)) })));
   const explorer = h('div', { class: 'explorer' });
   const pane = h('div', { class: 'files stack' });
@@ -1307,22 +1641,26 @@ async function documentsView() {
   let category = '';
   let paneTitle = null;
 
-  const fileRow = (folder, file, showFolder) => {
-    const action = h('span', { class: 'file-action small' }, 'Télécharger');
-    const row = h('button', {
-      type: 'button',
-      class: 'file',
-      'aria-label': `Télécharger ${file.title}`,
-      onclick: () => downloadFile(`/api/documents/${folder.id}/${file.id}`, file.fileName, row, pane, action),
-    },
-    h('span', { class: 'tag file-type' }, fileExtension(file)),
-    h('span', { class: 'file-info' },
-      h('span', { class: 'line name' }, file.title),
-      h('span', { class: 'line muted small' }, [showFolder && folder.name, file.date && dateFormat.format(file.date)].filter(Boolean).join(', '))),
-    action);
-    return h('li', { class: 'flush' }, row);
-  };
   const flat = () => folders.flatMap((folder) => (folder.files ?? []).map((file) => ({ folder, file })));
+  const newest = (a, b) => b.file.date - a.file.date;
+
+  /** Ligne d'un fichier ; `list` est la liste que la visionneuse parcourt depuis lui. */
+  const fileRow = (list, index, showFolder) => {
+    const { folder, file } = list[index];
+    const preview = h('button', { type: 'button', class: 'pv', 'aria-label': `Aperçu de ${file.title}`, onclick: () => openViewer(list, index, preview) }, 'Aperçu');
+    const download = h('button', {
+      type: 'button',
+      'aria-label': `Télécharger ${file.title}`,
+      onclick: () => downloadFile(`/api/documents/${folder.id}/${file.id}`, file.fileName, download, pane),
+    }, 'Télécharger');
+    return h('li', { class: 'file' },
+      typeBadge(file),
+      h('span', { class: 'file-info' },
+        h('span', { class: 'line name' }, file.title, isNew(file) && h('span', { class: 'new' }, 'Nouveau')),
+        h('span', { class: 'line muted small' }, [showFolder && folder.name, file.date && dateFormat.format(file.date)].filter(Boolean).join(', '))),
+      h('span', { class: 'file-actions' }, preview, download));
+  };
+  const fileList = (list, showFolder) => h('ul', { class: 'rows' }, list.map((_, i) => fileRow(list, i, showFolder)));
   const markOpen = (id) => {
     for (const [key, button] of Object.entries(buttons)) {
       if (key === id) button.setAttribute('aria-current', 'true');
@@ -1330,14 +1668,11 @@ async function documentsView() {
     }
   };
 
-  const showRecent = () => {
+  const showNone = () => {
     openFolder = '';
     markOpen('');
     explorer.removeAttribute('data-open');
-    const recent = flat().filter(({ file }) => file.date).sort((a, b) => b.file.date - a.file.date).slice(0, 6);
-    pane.replaceChildren(h('h2', {}, 'Derniers ajouts'), recent.length
-      ? h('ul', { class: 'rows' }, recent.map(({ folder, file }) => fileRow(folder, file, true)))
-      : empty('Choisis un dossier.'));
+    pane.replaceChildren(empty('Choisis un dossier pour voir ses fichiers.'));
   };
 
   const showFolder = (folder) => {
@@ -1348,7 +1683,7 @@ async function documentsView() {
       type: 'button',
       class: 'only-narrow',
       onclick: () => {
-        showRecent();
+        showNone();
         buttons[folder.id].focus();
       },
     }, 'Tous les dossiers');
@@ -1361,50 +1696,87 @@ async function documentsView() {
     const showCategory = () => {
       const shown = folder.files.filter((file) => !category || file.category === category);
       const groups = new Map();
-      for (const file of shown) groups.set(file.category, [...(groups.get(file.category) ?? []), file]);
+      for (const file of shown) groups.set(file.category, [...(groups.get(file.category) ?? []), { folder, file }]);
       list.replaceChildren(...(shown.length
-        ? [...groups].map(([name, items]) => h('section', { class: 'stack' }, name && h('h3', { class: 'day-title' }, `${name} (${items.length})`), h('ul', { class: 'rows' }, items.map((file) => fileRow(folder, file, false)))))
+        ? [...groups].map(([name, items]) => h('section', { class: 'stack' }, name && h('h3', { class: 'day-title' }, `${name} (${items.length})`), fileList(items, false)))
         : [empty('Aucun document ici.')]));
     };
     category = '';
     showCategory();
-    const filters = categories.length > 1 && filterChips('Filtrer par catégorie', [['', 'Tout'], ...categories.map((name) => [name, name])], '', (id) => { category = id; showCategory(); });
-    pane.replaceChildren(...[back, heading, filters, list].filter(Boolean));
+    const filters = categories.length > 1 && filterChips('Filtrer par catégorie', [['', `Tout (${folder.files.length})`], ...categories.map((name) => [name, `${name} (${folder.files.filter((f) => f.category === name).length})`])], '', (id) => { category = id; showCategory(); });
+    const latest = folder.files.reduce((max, file) => Math.max(max, file.date ?? 0), 0);
+    pane.replaceChildren(...[back,
+      h('div', { class: 'pane-head' }, heading, h('span', { class: 'muted small' }, [plural(folder.files.length, 'fichier'), latest && `mis à jour le ${shortFormat.format(latest)}`].filter(Boolean).join(' · '))),
+      filters, list].filter(Boolean));
   };
 
   const showResults = (query) => {
     const needle = query.trim().toLocaleLowerCase('fr');
-    if (!needle) return openFolder ? showFolder(folders.find((f) => f.id === openFolder)) : showRecent();
+    if (!needle) return openFolder ? showFolder(folders.find((f) => f.id === openFolder)) : showNone();
     const found = flat().filter(({ file }) => file.title.toLocaleLowerCase('fr').includes(needle)).slice(0, 40);
     explorer.setAttribute('data-open', 'true');
-    pane.replaceChildren(h('h2', {}, plural(found.length, 'résultat')), found.length
-      ? h('ul', { class: 'rows' }, found.map(({ folder, file }) => fileRow(folder, file, true)))
-      : empty('Aucun fichier ne correspond.'));
+    pane.replaceChildren(h('h2', {}, plural(found.length, 'résultat')), found.length ? fileList(found, true) : empty('Aucun fichier ne correspond.'));
   };
 
-  const search = h('input', { id: 'recherche', type: 'search', oninput: (e) => showResults(e.target.value) });
+  // Dossiers rangés par semestre ; les documents annuels à part, en dernier.
+  const groups = new Map();
+  for (const folder of folders) {
+    const group = folder.id === 'annual' ? ALL_YEAR : folder.semester || SEMESTERLESS;
+    groups.set(group, [...(groups.get(group) ?? []), folder]);
+  }
+  const rank = (name) => (name === ALL_YEAR ? 2 : name === SEMESTERLESS ? 1 : 0);
+  const ordered = [...groups].sort(([a], [b]) => rank(a) - rank(b) || a.localeCompare(b, 'fr', { numeric: true }));
+  const folderButton = (folder) => {
+    const fresh = folder.files?.filter(isNew).length ?? 0;
+    buttons[folder.id] = h('button', {
+      type: 'button',
+      onclick: () => {
+        showFolder(folder);
+        paneTitle.focus();
+      },
+    },
+    h('span', { class: 'folder-name' },
+      h('span', { class: 'name' }, folder.name),
+      h('span', { class: 'muted small' }, folder.files ? plural(folder.files.length, 'fichier') : 'Indisponible')),
+    fresh > 0 && h('span', { class: 'new' }, fresh > 1 ? `${fresh} nouveaux` : '1 nouveau'));
+    return h('li', { class: 'flush' }, buttons[folder.id]);
+  };
   explorer.append(
-    h('div', { class: 'stack' },
-      h('div', {}, h('label', { for: 'recherche' }, 'Rechercher un document'), search),
-      h('ul', { class: 'folders rows' }, folders.map((folder) => {
-        const count = folder.files ? plural(folder.files.length, 'fichier') : 'Indisponible';
-        buttons[folder.id] = h('button', {
-          type: 'button',
-          onclick: () => {
-            showFolder(folder);
-            paneTitle.focus();
-          },
-        },
-          h('span', { class: 'name' }, folder.name),
-          h('span', { class: 'muted small' }, [folder.hint, count].filter(Boolean).join(', ')));
-        return h('li', { class: 'flush' }, buttons[folder.id]);
-      }))),
+    h('ul', { class: 'folders rows', 'aria-label': 'Dossiers' }, ordered.flatMap(([name, list]) => [
+      ordered.length > 1 && h('li', { class: 'folder-group' }, name),
+      ...list.map(folderButton),
+    ])),
     pane);
+
+  // Nouveautés de la semaine en tête ; sans nouveauté, les derniers ajouts.
+  const dated = flat().filter(({ file }) => file.date).sort(newest);
+  const fresh = dated.filter(({ file }) => isNew(file)).slice(0, 8);
+  const recent = fresh.length ? fresh : dated.slice(0, 4);
+  const recentCard = (item, i) => {
+    const card = h('button', { type: 'button', class: 'recent', 'aria-label': `Aperçu de ${item.file.title}`, onclick: () => openViewer(recent, i, card) },
+      h('span', { class: 'recent-top' }, typeBadge(item.file), h('span', { class: 'muted small' }, relativePast(item.file.date))),
+      h('span', { class: 'name' }, item.file.title),
+      h('span', { class: 'muted small' }, item.folder.name));
+    return h('li', {}, card);
+  };
 
   const previous = folders.find((folder) => folder.id === openFolder);
   if (previous) showFolder(previous);
-  else showRecent();
-  return [picker && h('div', { class: 'filters' }, picker), explorer];
+  else showNone();
+  const search = h('input', { id: 'recherche', type: 'search', oninput: (e) => showResults(e.target.value) });
+  return [
+    h('div', { class: 'team-tools' }, picker, h('div', { class: 'wide-field' }, h('label', { for: 'recherche' }, 'Rechercher dans tous les dossiers'), search)),
+    recent.length > 0 && section(fresh.length ? `Nouveautés de la semaine (${fresh.length})` : 'Derniers ajouts', h('ul', { class: 'recent-grid' }, recent.map(recentCard))),
+    explorer,
+  ];
+}
+
+/** « aujourd'hui », « hier », « il y a 3 jours », puis la date. */
+function relativePast(date) {
+  const days = calendarDay(Date.now()) - calendarDay(date);
+  if (days <= 0) return 'aujourd\'hui';
+  if (days === 1) return 'hier';
+  return days < 30 ? `il y a ${days} jours` : shortFormat.format(date);
 }
 
 // --- Démarrage ---

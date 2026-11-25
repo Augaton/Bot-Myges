@@ -1,5 +1,5 @@
 // Accès aux données MyGes avec un cache mémoire court, par utilisateur.
-// Naviguer dans l'agenda, relancer /notes ou /profil coup sur coup ne rappelle
+// Naviguer dans l'agenda, relancer /notes ou une page du panel coup sur coup ne rappelle
 // plus MyGes à chaque fois. Les clés commencent par l'ID Discord : aucune
 // donnée n'est partagée entre utilisateurs, et forgetUser() efface tout ce qui
 // concerne un utilisateur (déconnexion, changement de compte).
@@ -296,7 +296,7 @@ function getPracticals(userId: string, token: GesAuthenticationToken, year = get
 }
 
 /**
- * Projets et TP réunis, pour /projets et les rappels. Les TP sont marqués
+ * Projets et TP réunis, pour le panel et les rappels. Les TP sont marqués
  * `practical` et ne servent qu'en complément : un échec sur leur route ne doit
  * pas priver l'utilisateur de ses projets. Les annonces de nouveaux projets sur
  * les serveurs restent sur getProjects, sinon tous les TP existants y partiraient

@@ -1,7 +1,7 @@
 import { Client } from 'discord.js';
 import { BOT_VERSION } from '../config';
 import { getGuildConfig, loadData, saveData } from '../core/store';
-import { buildChangelogEmbed } from '../commands/changelog';
+import { buildChangelogEmbed } from '../utils/changelog';
 import { log, logError } from '../utils/logger';
 
 /** Même version mineure (v4.5.0 → v4.5.1) : un correctif, rien de nouveau à annoncer. */

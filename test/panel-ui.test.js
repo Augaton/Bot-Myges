@@ -95,6 +95,7 @@ function browser({ storage, cookie: startCookie = '' } = {}) {
     });
 
     const root = new El('div');
+    const copied = [];
     const windowListeners = {};
     const location = { hash: '', pathname: '/' };
     const fakeWindow = { addEventListener: (type, fn) => { windowListeners[type] = fn; }, scrollTo(x, y) { this.lastScroll = y; }, scrollY: 0 };
@@ -109,6 +110,9 @@ function browser({ storage, cookie: startCookie = '' } = {}) {
         setTimeout: () => 0,
         clearTimeout() {},
         encodeURIComponent,
+        navigator: { clipboard: { writeText: async (text) => { copied.push(text); } } },
+        Blob,
+        TextDecoder,
     });
     vm.runInContext(source, context);
 
@@ -120,6 +124,7 @@ function browser({ storage, cookie: startCookie = '' } = {}) {
         context,
         window: fakeWindow,
         blobs,
+        copied,
         requests,
         windowListeners,
         failNext: (status, html) => { failure = { status, html }; },
@@ -128,6 +133,7 @@ function browser({ storage, cookie: startCookie = '' } = {}) {
         settle,
         text: () => root.textContent,
         byId: (id) => root.all((e) => e.attrs.id === id)[0],
+        folder: (label) => root.all((e) => e.tag === 'ul' && e.className === 'folders rows')[0]?.all((e) => e.tag === 'button' && e.textContent.includes(label))[0],
         button: (label) => root.all((e) => e.tag === 'button' && e.textContent.includes(label))[0],
         alerts: () => root.all((e) => e.attrs.role === 'alert' && !e.hidden).map((e) => e.textContent).filter(Boolean),
         async go(hash) {
@@ -213,8 +219,8 @@ test('parcours complet : connexion, chaque écran, téléchargement, déconnexio
 
     await page.go('notes');
     assert.match(page.text(), /Moyenne générale/);
-    assert.match(page.text(), /Notes : 12 ; 14,5/);
-    assert.match(page.text(), /Provisoire/);
+    assert.match(page.text(), /Réseaux Bernard 12 14,5 Exam\. 13 13,25/);
+    assert.match(page.text(), /11,00 +provisoire/);
 
     await page.go('absences');
     assert.match(page.text(), /Non justifiée/);
@@ -230,7 +236,8 @@ test('parcours complet : connexion, chaque écran, téléchargement, déconnexio
     assert.match(page.text(), /Le campus ferme le 11/);
 
     await page.go('documents');
-    await page.button('Réseaux').click();
+    assert.match(page.text(), /Nouveautés de la semaine \(1\)/);
+    await page.folder('Réseaux').click();
     await page.settle();
     assert.match(page.text(), /Cours 1/);
     assert.match(page.text(), /PDF/);
@@ -296,7 +303,7 @@ test('navigation : menu Plus, flèches du clavier et semaine suivante précharg�
     assert.notStrictEqual(page.text().match(/Semaine du .+? au \S+ \S+/)[0], before);
 });
 
-test('agenda : grille placée selon l\'heure de Paris, cours aussi lisible en liste', async (t) => {
+test('agenda : grille placée selon l\'heure de Paris, examen signalé par écrit, plus de liste à part', async (t) => {
     t.mock.method(console, 'log', () => {});
     const start = new Date();
     start.setHours(10, 30, 0, 0);
@@ -306,10 +313,12 @@ test('agenda : grille placée selon l\'heure de Paris, cours aussi lisible en li
     await page.signIn('grille', 'bon');
     await page.go('agenda');
     const block = page.root.all((e) => e.className.startsWith('event'))[0];
-    assert.strictEqual(block.className, 'event exam');
+    assert.strictEqual(block.className, 'event exam'); // sans salle : ni campus, ni couleur
+    assert.match(block.textContent, /^Examen /);
     assert.strictEqual(block.style.vars['--start'], '30'); // 10 h 30, grille à partir de 10 h
     assert.strictEqual(block.style.vars['--length'], '120');
-    assert.ok(page.root.all((e) => e.className.includes('only-narrow')).length > 0);
+    assert.strictEqual(page.root.all((e) => /only-(narrow|wide)/.test(e.className)).length, 0, 'une seule grille, à toutes les largeurs');
+    assert.strictEqual(page.root.all((e) => e.className === 'campus-legend').length, 0);
 });
 
 test('agenda : semaine vide, un bouton mène au prochain cours', async (t) => {
@@ -339,7 +348,7 @@ test('documents : dossiers, catégories et recherche', async (t) => {
     assert.match(page.text(), /Calendriers/);
     assert.match(page.text(), /Informations generales/);
 
-    await page.root.all((e) => e.className === 'tab' && e.textContent === 'Calendriers')[0].click();
+    await page.root.all((e) => e.className === 'tab' && e.textContent === 'Calendriers (1)')[0].click();
     assert.doesNotMatch(page.text(), /Guide 3/);
     await page.button('Tout').click();
     assert.match(page.text(), /Guide 3/);
@@ -350,6 +359,79 @@ test('documents : dossiers, catégories et recherche', async (t) => {
     assert.doesNotMatch(page.text(), /Guide 3/);
     await search.fire('input', { target: { value: 'introuvable' } });
     assert.match(page.text(), /Aucun fichier ne correspond/);
+});
+
+/** Archive ZIP minimale : le répertoire central et sa fin, ce que lit l'aperçu. */
+function zipOf(names) {
+    const dir = Buffer.concat(names.map((name) => {
+        const head = Buffer.alloc(46);
+        head.writeUInt32LE(0x02014b50, 0);
+        head.writeUInt16LE(Buffer.byteLength(name), 28);
+        return Buffer.concat([head, Buffer.from(name)]);
+    }));
+    const end = Buffer.alloc(22);
+    end.writeUInt32LE(0x06054b50, 0);
+    end.writeUInt16LE(names.length, 8);
+    end.writeUInt16LE(names.length, 10);
+    end.writeUInt32LE(dir.length, 12);
+    return Buffer.concat([dir, end]);
+}
+
+test('documents : aperçu de chaque fichier, flèches pour passer au suivant, fichier lu une seule fois', async (t) => {
+    t.mock.method(console, 'log', () => {});
+    const file = (id, label, extension, daysAgo) => ({ oc_id: id, label, extension, update_date: now - daysAgo * 24 * H });
+    mygesMock([
+        ['/me/42/files/3', () => new Response('SELECT 1;', { headers: { 'content-type': 'application/octet-stream' } })],
+        ['/me/42/files/4', () => new Response(zipOf(['src/', 'src/App.java', 'README.md']), { headers: { 'content-type': 'application/zip' } })],
+        ['/me/42/files', () => json(200, { result: [file(1, 'Cours 1', '.pdf', 0), file(2, 'Schéma', '.png', 1), file(3, 'Requêtes', '.sql', 2), file(4, 'Squelette', '.zip', 3), file(5, 'Séance', '.pptx', 4), file(6, 'Ancien', '.pdf', 40)] })],
+    ]);
+    const page = browser();
+    await page.settle();
+    await page.signIn('apercu', 'bon');
+    await page.go('documents');
+    assert.match(page.text(), /Nouveautés de la semaine \(5\)/);
+    assert.match(page.folder('Réseaux').textContent, /6 fichiers 5 nouveaux/);
+    await page.folder('Réseaux').click();
+
+    const viewer = () => page.root.all((e) => e.tag === 'dialog' && e.className === 'viewer')[0];
+    const opener = page.root.all((e) => e.className === 'pv' && e.attrs['aria-label'] === 'Aperçu de Cours 1')[0];
+    await opener.click();
+    await page.settle();
+    let frame = viewer().all((e) => e.tag === 'iframe')[0];
+    assert.strictEqual(frame.attrs.src, '/api/documents/42/1?name=Cours%201.pdf&apercu=1');
+    assert.match(viewer().textContent, /Réseaux · PDF · fichier 1 sur 6/);
+    assert.ok(viewer().all((e) => e.tag === 'a' && e.attrs.target === '_blank').length, 'ouverture dans un onglet, pour les téléphones');
+
+    const press = async (key) => { await viewer().fire('keydown', { key }); await page.settle(); };
+    await press('ArrowRight');
+    const image = viewer().all((e) => e.tag === 'img')[0];
+    assert.strictEqual(image.attrs.src, '/api/documents/42/2?name=Sch%C3%A9ma.png&apercu=1');
+    assert.strictEqual(image.attrs.alt, 'Schéma');
+
+    await press('ArrowRight');
+    assert.strictEqual(viewer().all((e) => e.tag === 'pre')[0].textContent, 'SELECT 1;');
+    const asked = page.requests.length;
+    await viewer().all((e) => e.tag === 'button' && e.textContent === 'Télécharger')[0].click();
+    assert.strictEqual(await page.blobs.at(-1).text(), 'SELECT 1;');
+    assert.strictEqual(page.requests.length, asked, 'le fichier lu pour l\'aperçu n\'est pas redemandé');
+
+    await press('ArrowRight');
+    assert.match(viewer().textContent, /2 fichiers dans l'archive src\/App\.java README\.md/);
+
+    await press('ArrowRight');
+    assert.match(viewer().textContent, /Pas d'aperçu pour ce fichier/);
+
+    await press('ArrowLeft');
+    await press('ArrowLeft');
+    await press('ArrowLeft');
+    await press('ArrowLeft');
+    await press('ArrowLeft'); // déjà au premier : on y reste
+    frame = viewer().all((e) => e.tag === 'iframe')[0];
+    assert.match(frame.attrs.src, /\/42\/1\?/);
+
+    await viewer().close();
+    assert.strictEqual(viewer(), undefined);
+    assert.ok(opener.focused, 'le focus revient au bouton qui a ouvert l\'aperçu');
 });
 
 test('clic sur un cours : détail, syllabus, et accès direct aux supports', async (t) => {
@@ -367,6 +449,18 @@ test('clic sur un cours : détail, syllabus, et accès direct aux supports', asy
     for (const expected of [/Salle 12 \(Nation 1\)/, /2ème étage/, /M\. Bernard/, /Présentiel/, /Semestre 1/, /Groupe A/, /24 étudiants/, /2 h/, /Projet/, /Bases réseau/, /Routage/, /1 séance/]) {
         assert.match(shown, expected);
     }
+
+    // Le campus du cours : son adresse, l'itinéraire et la copie de l'adresse.
+    const card = dialog.all((e) => e.className === 'campus-card c-nation1')[0];
+    assert.match(card.textContent, /Nation 1 242 Rue du Faubourg Saint-Antoine, 75012 Paris/);
+    const route = card.all((e) => e.tag === 'a')[0];
+    assert.strictEqual(route.textContent, 'Itinéraire');
+    assert.strictEqual(route.attrs.href, 'https://www.google.com/maps/dir/?api=1&destination=242%20Rue%20du%20Faubourg%20Saint-Antoine%2C%2075012%20Paris');
+    assert.strictEqual(route.attrs.target, '_blank');
+    const copy = card.all((e) => e.tag === 'button' && e.textContent.includes('Copier'))[0];
+    await copy.click();
+    assert.deepStrictEqual(page.copied, ['242 Rue du Faubourg Saint-Antoine, 75012 Paris']);
+    assert.strictEqual(copy.textContent, 'Adresse copiée');
 
     await dialog.all((e) => e.tag === 'button' && e.textContent.includes('Voir les supports'))[0].click();
     await page.settle();
@@ -417,11 +511,17 @@ test('projets : onglets, page détaillée, seul son groupe y figure, consigne t�
     await page.signIn('lecture', 'bon');
 
     await page.go('projets');
-    assert.match(page.text(), /En cours \(1\)/);
+    assert.match(page.text(), /Cette semaine \(1\)/);
     assert.match(page.text(), /Terminés \(1\)/);
-    assert.match(page.text(), /Étape 1 sur 2/);
+    assert.match(page.text(), /1 étape passée sur 2/);
     assert.match(page.text(), /Projet fini/);
     assert.strictEqual(page.root.all((e) => e.className === 'project-card').length, 1);
+    assert.doesNotMatch(page.text(), /aucun groupe/, 'son groupe est trouvé : pas de rappel');
+    // Frise des 30 prochains jours : le rendu de demain, marqué comme proche.
+    const strip = page.root.all((e) => e.className === 'deadline-strip')[0];
+    assert.match(strip.textContent, /Rendu · Projet Web/);
+    assert.match(strip.kids[0].className, /soon/);
+    assert.ok(Number(strip.kids[0].style.vars['--value']) < 0.1);
 
     await page.go('projet/1');
     const text = page.text();
@@ -429,6 +529,13 @@ test('projets : onglets, page détaillée, seul son groupe y figure, consigne t�
         assert.match(text, expected);
     }
     for (const hidden of [/NOTE INTERNE/, /Rendu autre groupe/, /action étrangère/, /Groupe 6/]) assert.doesNotMatch(text, hidden);
+
+    // Prochaine étape en bandeau, à ajouter à son agenda : un .ics avec rappel la veille.
+    const banner = page.root.all((e) => e.className === 'next-step')[0];
+    assert.match(banner.textContent, /Prochaine étape, demain|Prochaine étape, aujourd'hui/);
+    await page.button('Ajouter à mon agenda').click();
+    const ics = await page.blobs.at(-1).text();
+    for (const expected of [/^BEGIN:VCALENDAR\r\n/, /SUMMARY:Rendu · Projet Web\r\n/, /DESCRIPTION:Web\r\n/, /TRIGGER:-P1D/, /DTSTART:\d{8}T\d{6}Z/, /END:VCALENDAR\r\n$/]) assert.match(ics, expected);
 
     // Deuxième page du projet : les équipes, noms et membres seulement.
     await page.go('projet/1/equipes');
@@ -459,6 +566,9 @@ test('projets : sans groupe, l\'étudiant le voit tout de suite', async (t) => {
     await page.signIn('seul', 'bon');
     await page.go('projets');
     assert.match(page.text(), /Pas encore de groupe/);
+    const notice = page.root.all((e) => e.className === 'notice-danger')[0];
+    assert.match(notice.textContent, /Tu n'es dans aucun groupe\s+pour Sans groupe\./);
+    assert.strictEqual(notice.all((e) => e.tag === 'a')[0].attrs.href, '#projet/1/equipes');
     await page.go('projet/1');
     assert.match(page.text(), /aucun groupe pour ce projet/);
     await page.go('projet/999');
@@ -751,20 +861,31 @@ test('notes : moyenne provisoire, tri, et détail d\'une matière au clic', asyn
 
     await page.go('notes');
     assert.match(page.text(), /13,00/); // (9 × 2 + 15 × 4) / 6
-    assert.match(page.text(), /0 matière sur 3 avec une moyenne définitive/);
+    assert.match(page.text(), /Moyenne provisoire, contrôle continu compris/);
+    assert.match(page.text(), /1 matière sous 10/);
+    assert.match(page.text(), /0 sur 3 moyenne définitive/);
     const low = page.root.all((e) => e.className.includes('bar') && e.className.includes('low'));
     assert.ok(low.length > 0, 'note sous la moyenne repérée');
 
+    // Frise : un point par moyenne connue, celle sous 10 marquée, les provisoires creuses.
+    const dots = page.root.all((e) => e.className.startsWith('dot') && e.attrs.title);
+    assert.deepStrictEqual(dots.map((d) => [d.attrs.title, d.className]), [['Anglais, 9,00', 'dot low provisional'], ['Web, 15,00', 'dot provisional']]);
+    assert.strictEqual(dots[0].style.vars['--value'], String(9 / 20));
+
+    // Sous 10 : dans son bloc, en tête, quel que soit le tri ; le tri range le reste.
+    const heading = page.root.all((e) => e.tag === 'h2' && e.className === 'danger')[0];
+    assert.strictEqual(heading.textContent, 'À surveiller (1)');
     const order = () => {
-        const text = page.root.all((e) => e.tag === 'ul' && e.className.includes('rows'))[0].textContent;
+        const text = page.root.all((e) => e.tag === 'ul' && e.className === 'subjects').map((e) => e.textContent).join(' ');
         return ['Anglais', 'Droit', 'Web'].sort((a, b) => text.indexOf(a) - text.indexOf(b));
     };
-    assert.deepStrictEqual(order(), ['Anglais', 'Droit', 'Web']);
-    const sort = page.byId('tri');
-    await sort.fire('change', { target: { value: 'haute' } });
-    assert.deepStrictEqual(order(), ['Web', 'Anglais', 'Droit']);
-    await sort.fire('change', { target: { value: 'basse' } });
     assert.deepStrictEqual(order(), ['Anglais', 'Web', 'Droit']);
+    const sort = page.byId('tri');
+    await sort.fire('change', { target: { value: 'matiere' } });
+    assert.deepStrictEqual(order(), ['Anglais', 'Droit', 'Web']);
+    await sort.fire('change', { target: { value: 'haute' } });
+    assert.deepStrictEqual(order(), ['Anglais', 'Web', 'Droit']);
+    assert.match(page.text(), /Les autres matières \(2\)/);
 
     await page.button('Anglais').click();
     await page.settle();
@@ -782,7 +903,7 @@ test('notes : une lettre sans note chiffrée n\'est pas présentée comme un ré
     await page.settle();
     await page.signIn('lettre', 'bon');
     await page.go('notes');
-    const name = (label) => page.root.all((e) => e.tag === 'button' && e.className === 'course' && e.textContent.includes(label))[0];
+    const name = (label) => page.root.all((e) => e.tag === 'button' && e.className === 'subject' && e.textContent.includes(label))[0];
     assert.match(name('Anglais').textContent, /Pas de note/);
 
     await name('Anglais').click();
@@ -970,12 +1091,12 @@ test('documents : le focus suit l\'ouverture d\'un dossier et le retour, l\'erre
     await page.signIn('focus', 'bon');
     await page.go('documents');
 
-    const folder = page.root.all((e) => e.tag === 'button' && e.textContent.includes('Réseaux'))[0];
+    const folder = page.folder('Réseaux');
     await folder.click();
     assert.ok(page.root.all((e) => e.tag === 'h2' && e.focused && e.textContent.includes('Réseaux')).length, 'titre du dossier');
 
     page.failNext(502, '<html>');
-    await page.button('Cours 1').click();
+    await page.root.all((e) => e.attrs['aria-label'] === 'Télécharger Cours 1')[0].click();
     await page.settle();
     assert.ok(page.root.all((e) => e.attrs.role === 'alert' && e.scrolled).length, 'erreur visible');
 
@@ -983,21 +1104,37 @@ test('documents : le focus suit l\'ouverture d\'un dossier et le retour, l\'erre
     assert.ok(folder.focused);
 });
 
-test('agenda sur téléphone : aujourd\'hui est titré et montré, une seule fois', async (t) => {
+test('agenda : couleur et nom du campus sur chaque cours, légende avec l\'adresse, aujourd\'hui marqué', async (t) => {
     t.mock.method(console, 'log', () => {});
     const start = Date.now();
-    mygesMock([['/agenda', () => json(200, { result: [{ ...course(1, 0, 'T1 - Réseaux'), start_date: start, end_date: start + H }] })]]);
+    const remote = { reservation_id: 3, name: 'Anglais', start_date: start + 2 * H, end_date: start + 3 * H, modality: 'Distanciel', rooms: [] };
+    const elsewhere = { ...course(4, 1, 'Visite'), rooms: [{ name: 'B2', campus: 'REIMS' }] };
+    mygesMock([['/agenda', () => json(200, { result: [{ ...course(1, 0, 'T1 - Réseaux'), start_date: start, end_date: start + H }, remote, elsewhere] })]]);
     const page = browser();
     await page.settle();
-    await page.signIn('jour', 'bon');
+    await page.signIn('campus', 'bon');
     await page.go('agenda');
-    const today = page.root.all((e) => e.tag === 'section' && e.scrolled);
-    assert.strictEqual(today.length, 1);
-    assert.match(today[0].textContent, /Aujourd'hui/);
 
-    await page.go('notes');
-    await page.go('agenda');
-    assert.strictEqual(page.root.all((e) => e.tag === 'section' && e.scrolled).length, 0, 'au retour, on retrouve sa position');
+    const blocks = Object.fromEntries(page.root.all((e) => e.tag === 'button' && e.className.startsWith('event')).map((e) => [e.textContent.split(' ')[0], e]));
+    assert.strictEqual(blocks['Réseaux'].className, 'event c-nation1');
+    assert.match(blocks['Réseaux'].textContent, /Nation 1\s+· Salle 12/);
+    assert.strictEqual(blocks['Anglais'].className, 'event c-distanciel remote');
+    assert.match(blocks['Anglais'].textContent, /Distanciel$/);
+    assert.strictEqual(blocks['Visite'].className, 'event c-autre');
+    assert.match(blocks['Visite'].textContent, /Reims\s+· B2/);
+
+    const legend = page.root.all((e) => e.className === 'campus-legend')[0];
+    assert.strictEqual(legend.attrs['aria-label'], 'Campus de la semaine');
+    assert.match(legend.textContent, /Nation 1 242 Rue du Faubourg Saint-Antoine, 75012 Paris/);
+    assert.match(legend.textContent, /Distanciel En ligne/);
+    assert.match(legend.textContent, /Reims/);
+    const address = legend.all((e) => e.tag === 'a')[0];
+    assert.strictEqual(address.attrs.href, 'https://www.google.com/maps/search/?api=1&query=242%20Rue%20du%20Faubourg%20Saint-Antoine%2C%2075012%20Paris');
+    assert.strictEqual(address.attrs.rel, 'noopener');
+
+    assert.strictEqual(page.root.all((e) => e.attrs['data-today'] === 'true').length, 1);
+    assert.strictEqual(page.root.all((e) => e.attrs['aria-current'] === 'date').length, 1);
+    assert.strictEqual(page.root.all((e) => e.tag === 'section' && e.scrolled).length, 0, 'plus de liste à faire défiler');
 });
 
 test('menu Plus : se referme au contact du contenu', async (t) => {

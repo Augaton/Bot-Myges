@@ -1,14 +1,10 @@
-// /documents : lecture des réponses MyGes, téléchargement borné, parcours complet.
+// Documents : lecture des réponses MyGes et téléchargement borné (servis par le panel).
 const test = require('node:test');
 const assert = require('node:assert');
-const { EventEmitter } = require('node:events');
 const { dist, mockFetch, json } = require('./helpers');
 
 const { BaseService } = dist('myges/services/base.js');
 const { FileTooLargeError, MyGesError } = dist('myges/errors.js');
-const store = dist('core/store.js');
-const { encrypt } = dist('crypto.js');
-const documents = dist('commands/documents.js');
 const { acquireDownload, courseSources, releaseDownload, safeFileName, toDocuments } = dist('utils/documents.js');
 
 const creds = { token_type: 'bearer', access_token: 't' };
@@ -111,87 +107,4 @@ test('téléchargements : un seul à la fois par personne, plafond global', () =
     for (const u of ['a', 'b', 'c']) releaseDownload(u);
     assert.strictEqual(acquireDownload('d'), null);
     releaseDownload('d');
-});
-
-/** Exécute la commande avec un faux Discord ; les composants passent par le validateur de discord.js. */
-async function openCommand(userId) {
-    const replies = [];
-    const followUps = [];
-    const collector = Object.assign(new EventEmitter(), { resetTimer() {} });
-    const interaction = {
-        user: { id: userId },
-        options: { getString: () => null },
-        deferReply: async () => {},
-        editReply: async (reply) => {
-            replies.push(typeof reply === 'string' ? reply : { ...reply, components: reply.components?.map((r) => r.toJSON()) });
-            return { createMessageComponentCollector: () => collector };
-        },
-    };
-    await documents.default.execute(interaction);
-    const pick = async (customId, value) => {
-        const done = new Promise((resolve) => {
-            collector.emit('collect', {
-                customId,
-                values: [value],
-                user: { id: userId },
-                attachmentSizeLimit: 1024,
-                deferUpdate: async () => {},
-                followUp: async (payload) => followUps.push(payload),
-            });
-            setImmediate(resolve);
-        });
-        await done;
-        await new Promise((resolve) => setTimeout(resolve, 20));
-    };
-    return { replies, followUps, pick };
-}
-
-test('/documents : matière, liste des fichiers, puis fichier reçu en privé', async () => {
-    const data = store.loadData();
-    data.users.doc1 = { user: encrypt('p.nom'), pass: encrypt('secret') };
-    store.saveData(data);
-
-    const calls = mockFetch([
-        new Response(null, { status: 302, headers: { location: 'x:/#access_token=t&token_type=bearer&expires_in=86400' } }),
-        json(200, { result: [Number(dist('utils/schoolYear.js').getCurrentYear())] }), // années de l'étudiant
-        json(200, { result: [{ rc_id: 42, name: 'T1 - Réseaux', has_documents: true }] }),
-        json(200, { result: [{ oc_id: 7, label: 'Cours 1', extension: '.pdf', update_date: 1776702686256 }] }),
-        file('%PDF', { 'content-type': 'application/pdf' }),
-    ]);
-    const { replies, followUps, pick } = await openCommand('doc1');
-    const menu = (reply, row = 0) => reply.components[row].components[0];
-    assert.deepStrictEqual(menu(replies.at(-1)).options.map((o) => o.value), ['annual', '42']);
-    assert.strictEqual(menu(replies.at(-1)).options[0].label, 'Documents annuels');
-
-    await pick('doc_source', '42');
-    assert.ok(calls.at(-1).url.endsWith('/me/42/files'));
-    assert.deepStrictEqual(menu(replies.at(-1), 1).options.map((o) => o.label), ['Cours 1']);
-
-    await pick('doc_file', '7');
-    assert.ok(calls.at(-1).url.endsWith('/me/42/files/7'));
-    assert.strictEqual(followUps.length, 1);
-    assert.strictEqual(followUps[0].files[0].name, 'Cours 1.pdf');
-    assert.ok(followUps[0].flags); // jamais public
-});
-
-test('/documents : erreur, liste vide et fichier trop lourd donnent un message clair', async () => {
-    mockFetch([
-        json(200, { result: [{ rc_id: 42, name: 'Réseaux' }] }),
-        json(404, {}),
-        new Response(null, { status: 204 }),
-        json(200, { result: [{ oc_id: 7, label: 'Lourd' }] }),
-        file('x', { 'content-length': '2048' }),
-    ]);
-    const { replies, followUps, pick } = await openCommand('doc1');
-
-    await pick('doc_source', 'annual');
-    assert.match(replies.at(-1).embeds[0].data.description, /Impossible de récupérer ces documents/);
-
-    await pick('doc_source', '42');
-    assert.match(replies.at(-1).embeds[0].data.description, /Aucun document pour \*\*Réseaux\*\*/);
-    assert.strictEqual(replies.at(-1).components.length, 1); // pas de menu de fichiers vide
-
-    await pick('doc_source', 'annual'); // entrée simulée : l'API renvoie 200 avec un fichier
-    await pick('doc_file', '7');
-    assert.match(followUps[0].content, /dépasse/);
 });

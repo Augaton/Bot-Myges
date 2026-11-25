@@ -350,6 +350,60 @@ test('documents : liste, puis téléchargement toujours en pièce jointe', async
     assert.strictEqual((await call('GET', '/api/documents/42/..%2f..%2fprofile', { cookie })).status, 404);
 });
 
+test('aperçu d\'un document : PDF et images en ligne, sous leur propre politique ; rien d\'autre', async () => {
+    const cookie = await signIn('apercu', [
+        ['/me/42/files/9', () => new Response('<script>alert(1)</script>', { headers: { 'content-type': 'application/octet-stream', 'content-disposition': 'attachment; filename="page.html"' } })],
+        ['/me/42/files/', () => new Response('<script>alert(1)</script>', { headers: { 'content-type': 'application/octet-stream' } })],
+    ]);
+    const pdf = await call('GET', '/api/documents/42/7?apercu=1&name=Cours%201.pdf', { cookie });
+    assert.strictEqual(pdf.status, 200);
+    assert.strictEqual(pdf.headers['content-type'], 'application/pdf'); // d'après l'extension, jamais ce qu'annonce MyGes
+    assert.match(pdf.headers['content-disposition'], /^inline; filename\*=UTF-8''Cours%201\.pdf$/);
+    assert.strictEqual(pdf.headers['content-security-policy'], "default-src 'none'; object-src 'self'; frame-ancestors 'self'");
+    assert.strictEqual(pdf.headers['x-frame-options'], 'SAMEORIGIN');
+    assert.strictEqual(pdf.headers['x-content-type-options'], 'nosniff');
+    assert.strictEqual((await call('GET', '/api/documents/42/8?apercu=1&name=schema.PNG', { cookie })).headers['content-type'], 'image/png');
+
+    // HTML, SVG, Office ou nom absent : pas d'aperçu, et MyGes n'est pas lu pour rien.
+    for (const name of ['page.html', 'logo.svg', 'cours.docx', '']) {
+        assert.strictEqual((await call('GET', `/api/documents/42/7?apercu=1&name=${encodeURIComponent(name)}`, { cookie })).status, 415, name);
+    }
+    // Une erreur d'aperçu se lit dans le cadre : texte brut, encadrable par le panel seul.
+    const refused = await call('GET', '/api/documents/42/7?apercu=1&name=cours.docx', { cookie });
+    assert.strictEqual(refused.headers['content-type'], 'text/plain; charset=utf-8');
+    assert.strictEqual(refused.headers['x-frame-options'], 'SAMEORIGIN');
+    assert.strictEqual(refused.text, 'Pas d\'aperçu pour ce type de fichier.');
+    assert.strictEqual((await call('GET', '/api/documents/42/7?apercu=1&name=x.pdf')).headers['content-type'], 'text/plain; charset=utf-8'); // sans session
+    assert.strictEqual((await call('GET', '/api/documents/42/7?apercu=10&name=x.pdf')).headers['content-type'], 'application/json; charset=utf-8');
+    // Le vrai nom donné par MyGes l'emporte sur celui demandé.
+    assert.strictEqual((await call('GET', '/api/documents/42/9?apercu=1&name=faux.pdf', { cookie })).status, 415);
+    // Sans aperçu demandé : toujours en pièce jointe.
+    assert.strictEqual((await call('GET', '/api/documents/42/7?name=Cours%201.pdf', { cookie })).headers['content-type'], 'application/octet-stream');
+    // Le panel peut encadrer l'aperçu, et rien d'autre que lui-même.
+    assert.match((await call('GET', '/api/session')).headers['content-security-policy'], /frame-src 'self';.*frame-ancestors 'none'/);
+});
+
+test('campus : nom, adresse et couleur d\'après la valeur MyGes ; /campus et l\'agenda partagent les adresses', () => {
+    const { campusOf, BUILDINGS } = dist('utils/campuses.js');
+    assert.deepStrictEqual(campusOf('NATION1'), { key: 'nation1', name: 'Nation 1', address: '242 Rue du Faubourg Saint-Antoine, 75012 Paris' });
+    assert.deepStrictEqual(campusOf('Nation 2'), { key: 'nation2', name: 'Nation 2', address: '242 Rue du Faubourg Saint-Antoine, 75012 Paris' });
+    assert.deepStrictEqual(campusOf('VOLTAIRE2'), { key: 'voltaire2', name: 'Voltaire 2', address: '1 Rue Bouvier, 75011 Paris' });
+    assert.deepStrictEqual(campusOf('RAUCH'), { key: 'rauch', name: 'Rauch', address: '15 Rue Rames, 75012 Paris' });
+    assert.deepStrictEqual(campusOf('REIMS'), { key: 'autre', name: 'Reims', address: '' });
+    assert.deepStrictEqual(campusOf('LYON2'), { key: 'autre', name: 'Lyon 2', address: '' });
+    assert.strictEqual(campusOf(''), null);
+    assert.ok(BUILDINGS.every((b) => !/\d{4}/.test(JSON.stringify(b)) || /750\d\d/.test(b.address)), 'aucun code d\'accès dans le dépôt');
+
+    const [remote, onSite, unknown] = views.coursesView([
+        { reservation_id: 1, name: 'Anglais', start_date: 1000, end_date: 2000, modality: 'Distanciel', rooms: [{ name: 'Salle 3', campus: 'NATION1' }] },
+        { reservation_id: 2, name: 'Web', start_date: 3000, end_date: 4000, rooms: [{ name: 'Salle 12', campus: 'ERARD' }] },
+        { reservation_id: 3, name: 'Réseaux', start_date: 5000, end_date: 6000, rooms: [] },
+    ]);
+    assert.deepStrictEqual(remote.campus, { key: 'distanciel', name: 'Distanciel', address: '' });
+    assert.deepStrictEqual(onSite.campus, { key: 'erard', name: 'Erard', address: '21 Rue Erard, 75012 Paris' });
+    assert.strictEqual(unknown.campus, null);
+});
+
 test('vues : notes groupées par semestre, sans champ brut de MyGes', () => {
     const [s1, s2] = views.notesView([
         { course: 'T2 - Web', trimester_name: 'Semestre 2', average: 14, ects: '2.0', teacher_last_name: 'Martin' },

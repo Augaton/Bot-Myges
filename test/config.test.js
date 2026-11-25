@@ -26,7 +26,7 @@ test('la version affichée suit package.json', () => {
 });
 
 test('annonce : le lien du panel n\'y figure que s\'il est renseigné, et seulement en https', () => {
-    const { buildChangelogEmbed } = dist('commands/changelog.js');
+    const { buildChangelogEmbed } = dist('utils/changelog.js');
     const text = () => JSON.stringify(buildChangelogEmbed({ user: null }).toJSON());
     const before = process.env.PANEL_PUBLIC_URL;
     delete process.env.PANEL_PUBLIC_URL;

@@ -113,14 +113,13 @@ identifiants. Aucun intent Discord supplémentaire n'est nécessaire pour envoye
 | Clics dans un panneau | 20 par 30 s et par personne |
 | Partage dans un salon | 3 par minute et par personne, droit d'écrire requis |
 | `/login` | 5 essais par 15 min (par compte Discord et par identifiant MyGes), 30 échecs par 15 min en tout |
-| Téléchargements `/documents` | 1 par personne, 3 en tout |
+| Téléchargements de documents (panel) | 1 par personne, 3 en tout |
 | Rendus en attente | 16, les suivants sont refusés |
 
-## Documents (`/documents`)
+## Documents (panel)
 
-Les fichiers transitent par la mémoire du bot, jamais par le disque : ils sont
-téléchargés depuis MyGes puis envoyés en message éphémère, plafonnés à la limite
-d'envoi du salon (10 Mo sur un serveur sans boost) et à 25 Mo dans tous les cas.
+Les fichiers transitent par la mémoire du panel, jamais par le disque : ils sont
+téléchargés depuis MyGes puis envoyés au navigateur de l'étudiant, 25 Mo au plus.
 
 ## Journaux
 
@@ -210,7 +209,7 @@ journalctl -u botmyges -f
 - Toutes les heures, une ligne `[SANTÉ]` donne la RAM, le nombre de sessions et
   le ping : une RAM qui grimpe d'heure en heure se repère tout de suite.
 - Les coupures de la passerelle Discord sont journalisées (`[DISCORD] Passerelle…`).
-- `/ping` affiche la version, l'uptime et la RAM du bot.
+- `/help` affiche l'état de MyGES, la version et l'uptime du bot ; la RAM est dans les lignes `[SANTÉ]`.
 - Les erreurs MyGes passagères (5xx) sont rejouées automatiquement et
   journalisées en `[MYGES] … nouvelle tentative`.
 
@@ -383,7 +382,7 @@ MyGES l'est, chiffré avec une clé tirée du cookie de l'étudiant : le serveur
 de ce cookie, donc `panel_sessions.json` seul ne donne ni jeton, ni nom, ni identifiant. Il survit aux
 redémarrages. Une déconnexion efface l'entrée. Quand le jeton expire, l'étudiant se reconnecte.
 
-`/abonnement` donne un lien d'abonnement d'agenda (`https://<adresse>/agenda/<secret>.ics`). Le bot
+Le bouton « Mon lien d'abonnement » de `/panel` donne un lien d'abonnement d'agenda (`https://<adresse>/agenda/<secret>.ics`). Le bot
 garde le secret chiffré avec sa clé, comme les identifiants, et prépare toutes les 30 minutes les 12
 prochaines semaines, chiffrées avec ce secret, dans `PANEL_FEEDS_DIR`. Le panel sert ce fichier sans
 la clé du bot : le fichier seul ne donne rien. Le lien est un secret : nginx ne doit pas l'écrire dans

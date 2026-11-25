@@ -21,7 +21,7 @@ const MENU_MAX = 25;
 const command: Command = {
     data: new SlashCommandBuilder()
         .setName('notes')
-        .setDescription('Affiche les notes et moyennes par matière (vue graphique)')
+        .setDescription('Tes moyennes par matière en image, visibles par toi seul')
         .addStringOption(yearOption),
 
     autocomplete: yearAutocomplete,

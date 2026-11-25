@@ -5,10 +5,13 @@ import {
 import { Command } from '../core/command';
 import { getSession } from '../core/store';
 import { getTimetable } from '../core/mygesData';
+import { GesAuthenticationToken } from '../myges/types/auth';
 import { renderAgendaDay, renderAgendaWeek } from '../utils/renderPool';
 import { log, logError } from '../utils/logger';
 import { apiErrorMessage, noSessionMessage } from '../utils/replies';
 import { addDays, dayOptions, fromKey, getMonday, sameDay, startOfDay, weekOptions } from '../utils/datePicker';
+import { courseName, coursePlace } from '../utils/format';
+import { md } from '../utils/markdown';
 import { shareRow, SHARE_ID } from '../utils/share';
 import { limitLifetime, tooManyClicks } from '../utils/collector';
 
@@ -20,10 +23,29 @@ interface AgendaView {
 // Amplitude du décalage de la fenêtre de semaines proposées (≈ 3 mois).
 const WINDOW_SHIFT_WEEKS = 13;
 
+// Six semaines : en alternance, le prochain cours peut être loin.
+const NEXT_COURSE_DAYS = 42;
+
+/**
+ * Ligne « prochain cours » affichée en tête de l'agenda, ou null s'il n'y en a pas.
+ * Bornes calées sur minuit : la lecture est la même toute la journée, donc en cache.
+ */
+export async function nextCourseLine(userId: string, token: GesAuthenticationToken, now = Date.now()): Promise<string | null> {
+    const start = startOfDay(new Date(now));
+    const courses = await getTimetable(userId, token, start, addDays(start, NEXT_COURSE_DAYS));
+    const next = courses
+        .filter((c: any) => new Date(c.start_date).getTime() > now)
+        .sort((a: any, b: any) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime())[0];
+    if (!next) return null;
+    const at = Math.floor(new Date(next.start_date).getTime() / 1000);
+    const place = coursePlace(next);
+    return `⏭️ Prochain cours : **${md(courseName(next))}**, <t:${at}:f> (<t:${at}:R>)${place ? ` · ${md(place)}` : ''}`;
+}
+
 const command: Command = {
     data: new SlashCommandBuilder()
         .setName('agenda')
-        .setDescription('Voir les cours du jour ou de la semaine avec navigation'),
+        .setDescription('Ta semaine en image, le prochain cours en tête, à partager dans le salon'),
 
     execute: async (interaction: ChatInputCommandInteraction) => {
         // Discord n'accorde que 3 s pour accuser réception. Si l'hôte est lent
@@ -35,6 +57,9 @@ const command: Command = {
             log('AGENDA', `deferReply impossible (interaction expirée, code ${e?.code}).`);
             return;
         }
+
+        // Lu une fois par commande, en même temps que la première semaine affichée.
+        let nextLine: Promise<string | null> | null = null;
 
         const errorView = (msg: string): AgendaView => ({
             embeds: [new EmbedBuilder().setTitle('Erreur').setDescription(msg).setColor(0xff0000)],
@@ -58,6 +83,11 @@ const command: Command = {
                 end.setHours(23, 59, 59);
             }
 
+            nextLine ??= nextCourseLine(interaction.user.id, currentToken).catch((e) => {
+                logError('AGENDA', 'Prochain cours introuvable :', e);
+                return null;
+            });
+
             try {
                 // Mis en cache une minute (voir mygesData) : naviguer d'une
                 // semaine à l'autre puis revenir ne rappelle pas MyGes.
@@ -72,6 +102,8 @@ const command: Command = {
                 const embed = new EmbedBuilder()
                     .setColor(mode === 'day' ? 0x3498db : 0x5865f2)
                     .setImage('attachment://agenda.png');
+                const line = await nextLine;
+                if (line) embed.setDescription(line);
                 return { embeds: [embed], files: [file] };
             } catch (e) {
                 logError('AGENDA', "Impossible de générer l'agenda :", e);

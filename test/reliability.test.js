@@ -425,20 +425,17 @@ test('rentrée : tant que MyGes n\'a pas ouvert la nouvelle année, sa dernière
     assert.deepStrictEqual(people.map((p) => [p.id, p.current]), [['5', true]]); // « Ma classe » n'est pas vide
 });
 
-test('/absences et /notes : option « annee » en autocomplétion, seules les années de l\'étudiant', async (t) => {
+test('/notes : option « annee » en autocomplétion, seules les années de l\'étudiant', async (t) => {
     quiet(t);
     const { getCurrentYear } = dist('utils/schoolYear.js');
     const current = getCurrentYear();
     const past = String(Number(current) - 1);
-    const absences = dist('commands/absences.js').default;
     const notes = dist('commands/notes.js').default;
-    for (const command of [absences, notes]) {
-        const option = command.data.toJSON().options.find((o) => o.name === 'annee');
-        assert.ok(option, command.data.name);
-        assert.strictEqual(option.required, false);
-        assert.strictEqual(option.autocomplete, true);
-        assert.strictEqual(typeof command.autocomplete, 'function');
-    }
+    const option = notes.data.toJSON().options.find((o) => o.name === 'annee');
+    assert.ok(option);
+    assert.strictEqual(option.required, false);
+    assert.strictEqual(option.autocomplete, true);
+    assert.strictEqual(typeof notes.autocomplete, 'function');
 
     account('annee');
     store.openSession('annee', { token_type: 'bearer', access_token: 't' });
@@ -447,20 +444,21 @@ test('/absences et /notes : option « annee » en autocomplétion, seules les an
         const u = String(url);
         urls.push(u);
         if (u.endsWith('/me/years')) return json(200, { result: [Number(past), Number(current)] });
-        return json(200, { result: [{ course_name: 'Réseaux', date: '2025-01-10', justified: false }] });
+        return json(200, { result: [] });
     };
 
     // Propositions : les vraies années, l'année en cours signalée, filtrées par la saisie.
     let proposed = null;
     const typing = (focused) => ({ user: { id: 'annee' }, options: { getFocused: () => focused }, respond: async (c) => { proposed = c; } });
-    await absences.autocomplete(typing(''));
+    await notes.autocomplete(typing(''));
     assert.deepStrictEqual(proposed, [
         { name: `${current}-${Number(current) + 1} (en cours)`, value: current },
         { name: `${past}-${current}`, value: past },
     ]);
-    await absences.autocomplete(typing(`${past}-`));
+    await notes.autocomplete(typing(`${past}-`));
     assert.deepStrictEqual(proposed.map((c) => c.value), [past]);
 
+    // Une année qui n'est pas la sienne, ou trafiquée : refusée, sans appel à MyGes pour elle.
     const replies = [];
     const interaction = (value) => ({
         user: { id: 'annee' },
@@ -468,26 +466,20 @@ test('/absences et /notes : option « annee » en autocomplétion, seules les an
         deferReply: async () => {},
         editReply: async (r) => replies.push(r),
     });
-    await absences.execute(interaction(past));
-    assert.ok(urls.some((u) => u.endsWith(`/me/${past}/absences`)), urls.join(' '));
-    assert.match(replies.at(-1).embeds[0].data.title, new RegExp(`${past}-${current}`));
-
-    // Une année qui n'est pas la sienne, ou trafiquée : refusée, sans appel à MyGes pour elle.
-    urls.length = 0;
     for (const value of ['../../x', String(Number(current) - 6)]) {
-        await absences.execute(interaction(value));
+        await notes.execute(interaction(value));
         assert.strictEqual(replies.at(-1), 'Année indisponible pour ton compte.');
     }
-    assert.ok(!urls.some((u) => /absences/.test(u)), urls.join(' '));
+    assert.ok(!urls.some((u) => /grades/.test(u)), urls.join(' '));
 });
 
 test('autocomplétion de l\'année sans session : les dernières années plutôt que rien', async (t) => {
     quiet(t);
     const { yearChoices } = dist('utils/schoolYear.js');
-    const absences = dist('commands/absences.js').default;
+    const notes = dist('commands/notes.js').default;
     store.closeSession('sans-session');
     let proposed = null;
-    await absences.autocomplete({ user: { id: 'sans-session' }, options: { getFocused: () => '' }, respond: async (c) => { proposed = c; } });
+    await notes.autocomplete({ user: { id: 'sans-session' }, options: { getFocused: () => '' }, respond: async (c) => { proposed = c; } });
     assert.deepStrictEqual(proposed, yearChoices());
 });
 
@@ -519,7 +511,6 @@ test('étape sans date : ni 1er janvier 1970, ni comptée comme faite, rangée �
 });
 
 // --- Rentrée : MyGes n'a pas encore ouvert la nouvelle année
-const { EventEmitter } = require('node:events');
 
 /** MyGes simulé, réponses selon l'adresse ; `state` peut changer d'un cycle à l'autre. */
 function kordisByUrl(state) {
@@ -585,51 +576,6 @@ test('rentrée, annonces : les projets lus sont ceux de l\'année que MyGes donn
     await runProjectCheck(client);
     assert.ok(urls.some((u) => u.endsWith(`/me/${y - 1}/projects`)) && !urls.some((u) => u.endsWith(`/me/${y}/projects`)), urls.join(' '));
     assert.deepStrictEqual(client.posts.map((p) => p.name), ['Projet 2']);
-});
-
-test('/documents : option « annee », cours et documents annuels de l\'année choisie, année étrangère refusée', async (t) => {
-    quiet(t);
-    const y = thisYear();
-    const documents = dist('commands/documents.js').default;
-    account('docs-annee');
-    store.openSession('docs-annee', { token_type: 'bearer', access_token: 't' });
-    const urls = kordisByUrl({ years: [y - 1, y], routes: { [`/me/${y - 1}/courses`]: [{ rc_id: 77, name: 'Ancien cours', has_documents: true }] } });
-    assert.strictEqual(documents.data.toJSON().options[0].autocomplete, true);
-    const replies = [];
-    const collector = Object.assign(new EventEmitter(), { resetTimer() {} });
-    const interaction = (value) => ({
-        user: { id: 'docs-annee' },
-        options: { getString: (name) => (name === 'annee' ? value : null) },
-        deferReply: async () => {},
-        editReply: async (reply) => {
-            replies.push(reply);
-            return { createMessageComponentCollector: () => collector };
-        },
-    });
-    await documents.execute(interaction(String(y - 1)));
-    assert.ok(urls.some((u) => u.endsWith(`/me/${y - 1}/courses`)), urls.join(' '));
-    const reply = replies.at(-1);
-    assert.match(reply.embeds[0].data.description, new RegExp(`${y - 1}-${y}`));
-    assert.ok(reply.components[0].toJSON().components[0].options.some((o) => o.value === '77'));
-
-    await documents.execute(interaction(String(y - 7)));
-    assert.strictEqual(replies.at(-1), 'Année indisponible pour ton compte.');
-});
-
-test('rentrée, commandes : /profs, /trombi et /projets lisent l\'année que MyGes donne pour en cours', async (t) => {
-    quiet(t);
-    const y = thisYear();
-    account('cmd-rentree');
-    store.openSession('cmd-rentree', { token_type: 'bearer', access_token: 't' });
-    const urls = kordisByUrl({ years: [y - 1] });
-    for (const name of ['profs', 'trombi', 'projets']) {
-        const command = dist(`commands/${name}.js`).default;
-        await command.execute({ user: { id: 'cmd-rentree' }, options: { getString: () => null }, deferReply: async () => {}, editReply: async () => ({ createMessageComponentCollector: () => Object.assign(new EventEmitter(), { resetTimer() {} }) }) });
-    }
-    for (const route of ['teachers', 'classes', 'projects']) {
-        assert.ok(urls.some((u) => u.endsWith(`/me/${y - 1}/${route}`)), `${route} : ${urls.join(' ')}`);
-        assert.ok(!urls.some((u) => u.endsWith(`/me/${y}/${route}`)), route);
-    }
 });
 
 test('liste des années : gardée 3 heures, elle ne change qu\'à la rentrée', async (t) => {

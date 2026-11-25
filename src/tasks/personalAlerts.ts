@@ -185,7 +185,7 @@ function absencesEmbed(events: AbsenceEvent[]): EmbedBuilder {
         .setTitle(events.length > 1 ? `🚫 ${events.length} nouvelles absences` : '🚫 Nouvelle absence')
         .setDescription(lines.join('\n').slice(0, 4096))
         .setColor(0xe74c3c)
-        .setFooter({ text: `Détail avec /absences · ${FOOTER.text}` })
+        .setFooter({ text: `Détail dans le panel (/panel) · ${FOOTER.text}` })
         .setTimestamp();
 }
 
