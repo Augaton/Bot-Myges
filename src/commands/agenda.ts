@@ -1,14 +1,14 @@
 import {
-    ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, ChatInputCommandInteraction,
+    ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle,
     EmbedBuilder, MessageFlags, SlashCommandBuilder, StringSelectMenuBuilder,
 } from 'discord.js';
-import { Command } from '../core/command';
+import { Command, CommandInteraction } from '../core/command';
 import { getSession } from '../core/store';
 import { getTimetable } from '../core/mygesData';
 import { GesAuthenticationToken } from '../myges/types/auth';
 import { renderAgendaDay, renderAgendaWeek } from '../utils/renderPool';
 import { log, logError } from '../utils/logger';
-import { apiErrorMessage, noSessionMessage } from '../utils/replies';
+import { apiErrorMessage, noSessionMessage, sessionFor } from '../utils/replies';
 import { addDays, dayOptions, fromKey, getMonday, sameDay, startOfDay, weekOptions } from '../utils/datePicker';
 import { courseName, coursePlace } from '../utils/format';
 import { md } from '../utils/markdown';
@@ -47,7 +47,7 @@ const command: Command = {
         .setName('agenda')
         .setDescription('Ta semaine en image, le prochain cours en tête, à partager dans le salon'),
 
-    execute: async (interaction: ChatInputCommandInteraction) => {
+    execute: async (interaction: CommandInteraction) => {
         // Discord n'accorde que 3 s pour accuser réception. Si l'hôte est lent
         // (event-loop bloqué, horloge décalée), deferReply peut échouer avec
         // 10062 « Unknown interaction » : on l'ignore proprement au lieu de crasher.
@@ -57,6 +57,7 @@ const command: Command = {
             log('AGENDA', `deferReply impossible (interaction expirée, code ${e?.code}).`);
             return;
         }
+        if (!(await sessionFor(interaction))) return;
 
         // Lu une fois par commande, en même temps que la première semaine affichée.
         let nextLine: Promise<string | null> | null = null;

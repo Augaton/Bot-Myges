@@ -141,9 +141,11 @@ test('imageType : le contenu décide, pas le nom', () => {
 test('/panel : lien privé, seulement en https, jamais de panne visible', async () => {
     const panel = dist('commands/panel.js').default;
     const before = process.env.PANEL_PUBLIC_URL;
+    let deferred = null;
     const run = async () => {
         const replies = [];
-        await panel.execute({ reply: async (r) => replies.push(r) });
+        const push = async (r) => replies.push(r);
+        await panel.execute({ user: { id: 'sans-compte' }, deferReply: async (o) => { deferred = o; }, reply: push, editReply: push });
         return replies[0];
     };
 
@@ -157,7 +159,7 @@ test('/panel : lien privé, seulement en https, jamais de panne visible', async 
     const embed = reply.embeds[0].toJSON();
     assert.match(embed.description, /https:\/\/exemple\.test:8443/);
     assert.match(embed.footer.text, /non officiel/);
-    assert.ok(reply.flags, 'visible par l\'élève seul');
+    assert.ok(deferred.flags, 'visible par l\'élève seul');
 
     if (before === undefined) delete process.env.PANEL_PUBLIC_URL;
     else process.env.PANEL_PUBLIC_URL = before;

@@ -1,22 +1,23 @@
 import {
-    ActionRowBuilder, ButtonBuilder, ButtonStyle, ChatInputCommandInteraction, ComponentType, EmbedBuilder,
+    ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType, EmbedBuilder,
     MessageFlags, SlashCommandBuilder,
 } from 'discord.js';
-import { Command } from '../core/command';
+import { Command, CommandInteraction } from '../core/command';
 import { getUserAlerts, hasAccount, loadData, saveData } from '../core/store';
 import { limitLifetime } from '../utils/collector';
 import { sendDM } from '../utils/dm';
 import { log, logError } from '../utils/logger';
+import { noSessionReply } from '../utils/replies';
 
 const command: Command = {
     data: new SlashCommandBuilder()
         .setName('alertes')
         .setDescription('Gérer tes alertes en MP : notes, absences, rendus, agenda, programme du matin'),
 
-    execute: async (interaction: ChatInputCommandInteraction) => {
+    execute: async (interaction: CommandInteraction) => {
         const userId = interaction.user.id;
         if (!hasAccount(userId)) {
-            return interaction.reply({ content: "❌ Connecte-toi d'abord avec `/login`.", flags: MessageFlags.Ephemeral });
+            return interaction.reply({ ...noSessionReply(interaction.user.id), flags: MessageFlags.Ephemeral });
         }
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 

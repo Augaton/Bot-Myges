@@ -1797,6 +1797,15 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'ArrowRight') stepAgenda(1);
 });
 
-api('/api/session').then(({ name }) => showShell(name), (e) => {
+// Lien « Ouvrir le panel » de /panel sur Discord : un ticket à usage unique, dans le
+// fragment de l'adresse (jamais envoyé au serveur). Il est retiré de l'adresse avant
+// tout, pour ne rester ni dans l'historique ni dans un favori. S'il a expiré, une
+// session déjà ouverte sur cet appareil sert quand même.
+const ticket = /^#connexion=([A-Za-z0-9_-]{43})$/.exec(location.hash)?.[1];
+if (ticket) history.replaceState(null, '', location.pathname);
+const opening = ticket
+  ? post('/api/connexion', { ticket }).catch((e) => api('/api/session').catch(() => { throw e; }))
+  : api('/api/session');
+opening.then(({ name }) => showShell(name), (e) => {
   if (e.status !== 401) showLogin(e.message);
 });

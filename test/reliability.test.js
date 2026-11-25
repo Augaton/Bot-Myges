@@ -461,6 +461,7 @@ test('/notes : option « annee » en autocomplétion, seules les années de l\'�
     // Une année qui n'est pas la sienne, ou trafiquée : refusée, sans appel à MyGes pour elle.
     const replies = [];
     const interaction = (value) => ({
+        isChatInputCommand: () => true,
         user: { id: 'annee' },
         options: { getString: (name) => (name === 'annee' ? value : null) },
         deferReply: async () => {},

@@ -1,6 +1,8 @@
 // Réponses communes aux commandes qui interrogent MyGes : obtention de la
 // session et messages d'erreur adaptés à la cause réelle du problème.
-import { ChatInputCommandInteraction } from 'discord.js';
+import { ActionRowBuilder, ButtonBuilder } from 'discord.js';
+import type { CommandInteraction } from '../core/command';
+import { loginButton } from '../core/hub';
 import { getSession, hasAccount, loginFailure } from '../core/store';
 import { MyGesError } from '../myges/errors';
 import type { GesAuthenticationToken } from '../myges/types/auth';
@@ -14,13 +16,22 @@ export function noSessionMessage(userId: string): string {
     return '⚠️ Impossible de joindre MyGes pour le moment. Réessaie dans une minute.';
 }
 
+/** Le motif, et le bouton « Se connecter » quand il faut se (re)connecter. */
+export function noSessionReply(userId: string) {
+    const relogin = !hasAccount(userId) || loginFailure(userId) === 'bad-credentials';
+    return {
+        content: noSessionMessage(userId),
+        components: relogin ? [new ActionRowBuilder<ButtonBuilder>().addComponents(loginButton())] : [],
+    };
+}
+
 /**
  * Session MyGes de l'auteur de la commande (rétablie à la volée si besoin), ou
  * null après lui avoir expliqué pourquoi. L'interaction doit déjà être différée.
  */
-export async function sessionFor(interaction: ChatInputCommandInteraction): Promise<GesAuthenticationToken | null> {
+export async function sessionFor(interaction: CommandInteraction): Promise<GesAuthenticationToken | null> {
     const session = await getSession(interaction.user.id);
-    if (!session) await interaction.editReply(noSessionMessage(interaction.user.id));
+    if (!session) await interaction.editReply(noSessionReply(interaction.user.id));
     return session;
 }
 

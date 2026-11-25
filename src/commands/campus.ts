@@ -1,13 +1,13 @@
 import * as fs from 'node:fs';
-import { ChatInputCommandInteraction, EmbedBuilder, MessageFlags, SlashCommandBuilder } from 'discord.js';
-import { Command } from '../core/command';
+import { EmbedBuilder, MessageFlags, SlashCommandBuilder } from 'discord.js';
+import { Command, CommandInteraction } from '../core/command';
 import { getTimetable } from '../core/mygesData';
 import { getSession, hasAccount } from '../core/store';
 import { CAMPUS_FILE } from '../config';
 import { BUILDINGS } from '../utils/campuses';
 import { addDays, startOfDay } from '../utils/datePicker';
 import { log, logError } from '../utils/logger';
-import { apiErrorMessage, noSessionMessage } from '../utils/replies';
+import { apiErrorMessage, noSessionMessage, noSessionReply } from '../utils/replies';
 
 // Les adresses sont publiques (utils/campuses) ; les codes d'accès, eux, ne doivent
 // pas figurer dans le dépôt (il est public). Ils sont lus dans campus.json, hors
@@ -66,10 +66,10 @@ const command: Command = {
         .setName('campus')
         .setDescription("Adresses et codes d'accès des campus de l'ESGI"),
 
-    execute: async (interaction: ChatInputCommandInteraction) => {
+    execute: async (interaction: CommandInteraction) => {
         // Codes réservés aux étudiants identifiés : un compte MyGes enregistré suffit.
         if (!hasAccount(interaction.user.id)) {
-            return interaction.reply({ content: "❌ Connecte-toi d'abord avec `/login`.", flags: MessageFlags.Ephemeral });
+            return interaction.reply({ ...noSessionReply(interaction.user.id), flags: MessageFlags.Ephemeral });
         }
 
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });

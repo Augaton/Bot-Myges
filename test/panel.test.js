@@ -92,16 +92,18 @@ test('isolation : le panel ne charge ni Discord, ni le canvas, ni les secrets du
     const env = { ...process.env };
     delete env.DISCORD_TOKEN;
     delete env.ENCRYPTION_KEY;
+    delete env.PANEL_TICKETS_DIR; // posé par les tests eux-mêmes (helpers.js)
     const out = spawnSync(process.execPath, ['-e', script], { env, encoding: 'utf-8' });
     assert.strictEqual(out.status, 0, out.stderr);
     const result = JSON.parse(out.stdout);
     assert.deepStrictEqual(result.loaded, []);
     assert.strictEqual(result.token, null);
     assert.strictEqual(result.key, null);
-    const { sessionsFile, feedsDir, ...settings } = result.s;
+    const { sessionsFile, feedsDir, ticketsDir, ...settings } = result.s;
     assert.deepStrictEqual(settings, { host: '127.0.0.1', port: 4321, trustProxy: true });
     assert.strictEqual(sessionsFile, path.join(dir, 'panel_sessions.json'));
     assert.strictEqual(feedsDir, path.join(dir, 'panel_feeds'));
+    assert.strictEqual(ticketsDir, path.join(dir, 'panel_tickets'));
 });
 
 test('derrière un proxy, le panel démarre en HTTP sur 0.0.0.0 et le signale', async () => {

@@ -165,7 +165,7 @@ test('supprimer, puis /logout : le lien cesse de fonctionner, rien ne reste', as
     assert.match((await run('abo', 'supprimer')).text, /pas d'abonnement/);
 
     const again = (await run('abo')).secret;
-    await logout.execute({ user: { id: 'abo', tag: 'abo', displayAvatarURL: () => null }, reply: async () => {}, editReply: async () => {}, deferReply: async () => {} });
+    await logout.execute({ isButton: () => false, user: { id: 'abo', tag: 'abo', displayAvatarURL: () => null }, reply: async () => {}, editReply: async () => {}, deferReply: async () => {} });
     assert.strictEqual((await feed(again)).status, 404);
     assert.strictEqual(store.loadData().feeds?.abo, undefined);
     assert.deepStrictEqual(fs.readdirSync(FEEDS), []);
@@ -190,9 +190,11 @@ test('/panel : lien du panel et bouton d\'abonnement, visibles par l\'étudiant 
     process.env.PANEL_PUBLIC_URL = 'https://exemple.test:8443';
     try {
         const replies = [];
-        await panel.execute({ reply: async (r) => replies.push(r) });
+        let deferred = null;
+        const push = async (r) => replies.push(r);
+        await panel.execute({ user: { id: 'sans-compte' }, deferReply: async (o) => { deferred = o; }, reply: push, editReply: push });
         const reply = replies.at(-1);
-        assert.ok(reply.flags);
+        assert.ok(deferred.flags);
         assert.match(reply.embeds[0].data.description, /https:\/\/exemple\.test:8443/);
         assert.deepStrictEqual(reply.components[0].toJSON().components.map((b) => b.custom_id), ['feed:lien']);
 
@@ -235,7 +237,7 @@ test('passage du bot en cours : un /logout ne laisse pas l\'ancien lien revivre,
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     // Pendant ce temps : course-a se déconnecte, course-b crée son lien.
-    await logout.execute({ user: { id: 'course-a', tag: 'a', displayAvatarURL: () => null }, reply: async () => {}, editReply: async () => {}, deferReply: async () => {} });
+    await logout.execute({ isButton: () => false, user: { id: 'course-a', tag: 'a', displayAvatarURL: () => null }, reply: async () => {}, editReply: async () => {}, deferReply: async () => {} });
     kordis();
     const fresh = (await run('course-b')).secret;
 

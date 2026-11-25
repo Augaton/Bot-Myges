@@ -7,6 +7,7 @@ const path = require('node:path');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'botmyges-test-'));
 process.env.DB_FILE = path.join(dir, 'saved_data.json');
 process.env.CAMPUS_FILE = path.join(dir, 'campus.json');
+process.env.PANEL_TICKETS_DIR = path.join(dir, 'panel_tickets');
 process.env.ENCRYPTION_KEY = 'test-key-0123456789abcdef0123456';
 process.env.OWNER_IDS = '';
 

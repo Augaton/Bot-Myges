@@ -1,8 +1,8 @@
 import {
-    ActionRowBuilder, ButtonBuilder, ButtonInteraction, ButtonStyle, ChatInputCommandInteraction, EmbedBuilder,
+    ActionRowBuilder, ButtonBuilder, ButtonInteraction, ButtonStyle, EmbedBuilder,
     MessageFlags, SlashCommandBuilder,
 } from 'discord.js';
-import { Command } from '../core/command';
+import { Command, CommandInteraction } from '../core/command';
 import { BOT_VERSION } from '../config';
 import { buildChangelogEmbed } from '../utils/changelog';
 import { logError } from '../utils/logger';
@@ -58,7 +58,7 @@ const command: Command = {
         .setName('help')
         .setDescription('Les commandes, l\'état de MyGES et les nouveautés'),
 
-    execute: async (interaction: ChatInputCommandInteraction) => {
+    execute: async (interaction: CommandInteraction) => {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
         const embed = new EmbedBuilder()
@@ -71,7 +71,7 @@ const command: Command = {
                 { name: '📅 Au quotidien', value: '` /agenda ` : Ta semaine en image, le prochain cours en tête\n` /notes ` : Tes moyennes par matière en image' },
                 { name: '🔒 Pour toi seul', value: '` /alertes ` : Notes, absences, rendus et agenda en MP\n` /campus ` : Adresses et codes d\'accès des campus' },
                 { name: '🌐 Dans le panel', value: 'Absences, projets, documents, profil, annuaire, actualités et événements : ` /panel ` te donne le lien.' },
-                { name: '⚙️ Administrateurs', value: '` /config ` : Configurer le bot pour ce serveur' },
+                { name: '⚙️ Administrateurs', value: '` /config ` : Salons du bot et tableau de bord à boutons, pour que personne n\'ait de commande à taper' },
                 { name: '🖥️ État', value: `MyGES : ${await mygesStatus()}\nBot ${BOT_VERSION}, en ligne depuis ${formatUptime(process.uptime())}` },
                 { name: '💡 Astuce', value: "Mes réponses ne sont visibles que par toi. Le bouton **📢 Partager dans le salon** en publie une copie pour tout le monde, pratique pour montrer un emploi du temps sans que l'autre ait à lancer la commande." },
             )

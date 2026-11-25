@@ -52,7 +52,7 @@ let port;
 let server;
 test.before(() => new Promise((resolve) => {
     const sessionsFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'panel-ui-')), 'panel_sessions.json');
-    server = createPanel({ trustProxy: false, sessionsFile });
+    server = createPanel({ trustProxy: false, sessionsFile, ticketsDir: process.env.PANEL_TICKETS_DIR });
     server.listen(0, '127.0.0.1', () => {
         port = server.address().port;
         resolve();
@@ -61,7 +61,7 @@ test.before(() => new Promise((resolve) => {
 test.after(() => server.close());
 
 /** Navigateur minimal : cookie gardé d'une requête à l'autre, comme le ferait le vrai. */
-function browser({ storage, cookie: startCookie = '' } = {}) {
+function browser({ storage, cookie: startCookie = '', hash = '' } = {}) {
     let cookie = startCookie;
     let rawCookie = '';
     const blobs = [];
@@ -97,7 +97,7 @@ function browser({ storage, cookie: startCookie = '' } = {}) {
     const root = new El('div');
     const copied = [];
     const windowListeners = {};
-    const location = { hash: '', pathname: '/' };
+    const location = { hash, pathname: '/' };
     const fakeWindow = { addEventListener: (type, fn) => { windowListeners[type] = fn; }, scrollTo(x, y) { this.lastScroll = y; }, scrollY: 0 };
     const context = vm.createContext({
         document: { getElementById: () => root, createElement: (tag) => new El(tag), title: '' },
@@ -187,6 +187,26 @@ function mygesMock(overrides = []) {
         return json(200, { result: [] });
     };
 }
+
+test('lien « Ouvrir le panel » de Discord : connecté sans mot de passe, ticket retiré de l\'adresse ; déjà servi, le formulaire le dit', async (t) => {
+    t.mock.method(console, 'log', () => {});
+    t.mock.method(console, 'error', () => {});
+    mygesMock();
+    const { createTicket } = dist('utils/panelTicket.js');
+    const secret = createTicket(process.env.PANEL_TICKETS_DIR, 'ui-ticket', { token_type: 'bearer', access_token: 't', expires_at: now + H }, 'i.morel');
+
+    const page = browser({ hash: `#connexion=${secret}` });
+    assert.strictEqual(page.context.location.hash, '', 'retiré de l\'adresse avant toute requête');
+    await page.settle();
+    assert.match(page.text(), /Bonjour Inès/);
+    assert.strictEqual(page.byId('password'), undefined);
+    assert.ok(!page.requests.some((url) => url.includes(secret)), 'jamais dans une adresse demandée au serveur');
+
+    const reused = browser({ hash: `#connexion=${secret}` });
+    await reused.settle();
+    assert.ok(reused.byId('password'), 'formulaire de connexion');
+    assert.match(reused.alerts().join(), /déjà servi/);
+});
 
 test('parcours complet : connexion, chaque écran, téléchargement, déconnexion', async (t) => {
     t.mock.method(console, 'log', () => {});

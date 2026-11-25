@@ -8,6 +8,8 @@ saved_data.json*
 panel_sessions.json*
 # Abonnements d'agenda, chiffrés : préparés par le bot pour le panel
 /panel_feeds
+# Tickets de connexion au panel (10 min, chiffrés) : déposés par /panel
+/panel_tickets
 # Certificats HTTPS du panel
 /certs
 *.pem

@@ -233,9 +233,16 @@ cookie `Secure` n'est de toute façon pas accepté en HTTP simple.
 | `PANEL_PORT` | `3000` | Port d'écoute. |
 | `PANEL_TLS_CERT` | absent | Certificat (`fullchain.pem`). Relu toutes les 6 h, sans redémarrage. |
 | `PANEL_TLS_KEY` | absent | Clé privée (`privkey.pem`), en mode 600. |
-| `PANEL_FEEDS_DIR` | `panel_feeds` à la racine | Abonnements d'agenda chiffrés, écrits par le bot, servis par le panel. Les deux doivent voir le même dossier. |
+| `PANEL_FEEDS_DIR` | `panel_feeds` à la racine | Abonnements d'agenda chiffrés, écrits par le bot, servis par le panel. Le bot et le panel doivent voir le même dossier. |
+| `PANEL_TICKETS_DIR` | `panel_tickets` à la racine | Tickets de connexion déposés par `/panel` (voir ci-dessous). Le bot et le panel doivent voir le même dossier, distinct de `PANEL_FEEDS_DIR`. |
 | `PANEL_SESSIONS_FILE` | `panel_sessions.json` à la racine | Sessions « Rester connecté », en mode 600. Le supprimer déconnecte tout le monde. |
 | `PANEL_TRUST_PROXY` | absent | `1` uniquement derrière un proxy, pour limiter les essais par visiteur. |
+
+**Connexion depuis Discord.** À un étudiant connecté au bot, `/panel` donne un bouton
+qui ouvre le panel déjà connecté. Le bot dépose un ticket chiffré dans `panel_tickets`
+(`PANEL_TICKETS_DIR`) ; le panel le supprime à l'usage. Un ticket sert une fois, dans les
+10 minutes, et la session ouverte ainsi se ferme avec le navigateur. Le panel doit
+donc pouvoir lire et supprimer les fichiers de ce dossier, comme il lit `panel_feeds`.
 
 Seules ces variables sont lues dans le `.env` : le processus du panel ne charge ni
 `DISCORD_TOKEN` ni `ENCRYPTION_KEY`. Pour une séparation complète, fais-le tourner

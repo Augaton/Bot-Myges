@@ -28,6 +28,12 @@ export function buildChangelogEmbed(client: Client): EmbedBuilder {
                     '• L\'état de MyGES et les nouveautés : dans `/help`.',
             },
             {
+                name: '🧭 Tableau de bord',
+                value:
+                    '• Un message à boutons, publié par les administrateurs avec `/config` : se connecter, agenda, notes, panel, alertes… sans taper de commande.\n' +
+                    '• Les réponses restent visibles par toi seul.',
+            },
+            {
                 name: '🗓️ Agenda du panel',
                 value:
                     '• Une couleur par campus, avec son adresse et l\'itinéraire dans la fiche du cours.\n' +
@@ -43,7 +49,7 @@ export function buildChangelogEmbed(client: Client): EmbedBuilder {
             {
                 name: '🌐 Le panel étudiant',
                 value:
-                    '• `/panel` te donne le lien.\n' +
+                    '• Connecté au bot ? Le bouton « Ouvrir le panel » de `/panel` t\'y fait entrer sans mot de passe.\n' +
                     '• Service non officiel, sans lien avec MyGES ni le Réseau GES.' +
                     (panelLink ? `\n• Accès : ${panelLink}` : ''),
             },

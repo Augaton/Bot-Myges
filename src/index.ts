@@ -5,8 +5,11 @@ import {
     ActivityType, Client, Events, GatewayIntentBits, MessageFlags, Options, Status,
 } from 'discord.js';
 import { commands, commandsJSON } from './core/registry';
+import type { Command, CommandInteraction } from './core/command';
+import { hubCommand, refreshHubs } from './core/hub';
 import { loadData, saveData, sessionCount, tightenPermissions } from './core/store';
 import { handleLoginModal, LOGIN_MODAL_ID } from './commands/login';
+import { LOGOUT_CONFIRM_ID } from './commands/logout';
 import { FEED_PREFIX, handleFeedButton } from './commands/panel';
 import { handleHelpButton, HELP_NEWS_ID } from './commands/help';
 import { runProjectCheck } from './tasks/projects';
@@ -165,7 +168,9 @@ client.once(Events.ClientReady, async (ready) => {
         logError('BOOT', 'Enregistrement des commandes impossible :', e);
     }
 
-    // 3. Annonce de mise à jour si la version a changé
+    // 3. Annonce de mise à jour si la version a changé. Les tableaux de bord sont
+    // remis à jour en parallèle : les tâches de fond n'ont pas à les attendre.
+    void refreshHubs(client).catch((e) => logError('HUB', 'Mise à jour des tableaux de bord impossible :', e));
     await announceUpdateIfNeeded(client);
 
     // 4. Tâches de fond. Les sessions MyGes ne sont plus rouvertes en bloc au
@@ -194,6 +199,30 @@ client.once(Events.ClientReady, async (ready) => {
 // adresse par le pare-feu de Kordis, pour tout le monde.
 const commandLimiter = new RateLimiter(10, 30_000);
 
+/** Lance une commande pour son auteur : commande slash ou bouton du tableau de bord. */
+async function runCommand(command: Command, interaction: CommandInteraction, label: string) {
+    const who = `${interaction.user.tag} (${interaction.user.id})`;
+    if (!commandLimiter.hit(interaction.user.id)) {
+        log('CMD', `${label} refusée (trop de commandes) : ${who}`);
+        await interaction.reply({ content: '⏳ Trop de commandes d\'un coup. Réessaie dans quelques secondes.', flags: MessageFlags.Ephemeral }).catch(() => {});
+        return;
+    }
+    log('CMD', `${label} par ${who}`);
+    try {
+        await command.execute(interaction);
+    } catch (e) {
+        logError('CMD', `Erreur ${label} (${who}) :`, e);
+        // Sans cela, Discord laisse la commande sur « réfléchit… » indéfiniment.
+        const oops = '❌ Une erreur est survenue. Réessaie dans un instant.';
+        try {
+            if (interaction.deferred || interaction.replied) await interaction.editReply({ content: oops, embeds: [], components: [], attachments: [] });
+            else await interaction.reply({ content: oops, flags: MessageFlags.Ephemeral });
+        } catch {
+            /* interaction expirée : rien de plus à faire */
+        }
+    }
+}
+
 client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isAutocomplete()) {
         const command = commands.get(interaction.commandName);
@@ -203,28 +232,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
     if (interaction.isChatInputCommand()) {
         const command = commands.get(interaction.commandName);
-        if (!command) return;
-        const who = `${interaction.user.tag} (${interaction.user.id})`;
-        if (!commandLimiter.hit(interaction.user.id)) {
-            log('CMD', `/${interaction.commandName} refusée (trop de commandes) : ${who}`);
-            await interaction.reply({ content: '⏳ Trop de commandes d\'un coup. Réessaie dans quelques secondes.', flags: MessageFlags.Ephemeral }).catch(() => {});
+        if (command) await runCommand(command, interaction, `/${interaction.commandName}`);
+        return;
+    }
+
+    // Boutons du tableau de bord (et confirmation de déconnexion) : la commande
+    // elle-même, lancée pour celui qui clique, sous les mêmes limites.
+    if (interaction.isButton()) {
+        const name = hubCommand(interaction.customId) ?? (interaction.customId === LOGOUT_CONFIRM_ID ? 'logout' : null);
+        const command = name ? commands.get(name) : undefined;
+        if (command) {
+            await runCommand(command, interaction, `/${name} (bouton)`);
             return;
         }
-        log('CMD', `/${interaction.commandName} par ${who}`);
-        try {
-            await command.execute(interaction);
-        } catch (e) {
-            logError('CMD', `Erreur /${interaction.commandName} (${who}) :`, e);
-            // Sans cela, Discord laisse la commande sur « réfléchit… » indéfiniment.
-            const oops = '❌ Une erreur est survenue. Réessaie dans un instant.';
-            try {
-                if (interaction.deferred || interaction.replied) await interaction.editReply({ content: oops, embeds: [], components: [], attachments: [] });
-                else await interaction.reply({ content: oops, flags: MessageFlags.Ephemeral });
-            } catch {
-                /* interaction expirée : rien de plus à faire */
-            }
-        }
-        return;
     }
 
     // Bouton « partager » : routé ici pour fonctionner sur toutes les commandes,

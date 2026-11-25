@@ -1,14 +1,15 @@
 import {
-    ActionRowBuilder, ChatInputCommandInteraction, ModalBuilder, ModalSubmitInteraction,
+    ActionRowBuilder, ModalBuilder, ModalSubmitInteraction,
     MessageFlags, SlashCommandBuilder, TextInputBuilder, TextInputStyle,
 } from 'discord.js';
-import { Command } from '../core/command';
+import { Command, CommandInteraction } from '../core/command';
 import { GesAPI } from '../myges/ges-api';
 import { accountKey, VALID_USERNAME } from '../myges/identifier';
 import { BadCredentialsError, MyGesError } from '../myges/errors';
 import { decrypt, encrypt, fingerprint } from '../crypto';
 import { loadData, openSession, resetAlertHistory, saveData } from '../core/store';
 import { removeFeed } from '../tasks/agendaFeeds';
+import { dropTicket } from '../utils/panelTicket';
 import type { SavedData } from '../core/store';
 import { forgetUser } from '../core/mygesData';
 import { runProjectCheck } from '../tasks/projects';
@@ -71,7 +72,7 @@ const command: Command = {
         .setName('login')
         .setDescription('Connexion à MyGes pour accéder à tes données personnalisées'),
 
-    execute: async (interaction: ChatInputCommandInteraction) => {
+    execute: async (interaction: CommandInteraction) => {
         const modal = new ModalBuilder().setCustomId(LOGIN_MODAL_ID).setTitle('Connexion MyGes 🔐');
 
         const userInput = new TextInputBuilder()
@@ -156,7 +157,10 @@ export async function handleLoginModal(interaction: ModalSubmitInteraction) {
         if (previous && alerts && !sameAccount(previous, username)) resetAlertHistory(alerts);
         saveData(data);
         // De même, l'abonnement d'agenda servait l'autre compte : son lien est coupé.
-        if (previous && !sameAccount(previous, username)) removeFeed(interaction.user.id);
+        if (previous && !sameAccount(previous, username)) {
+            removeFeed(interaction.user.id);
+            dropTicket(interaction.user.id);
+        }
 
         // Sauvegarde Session (auto-rafraîchissante). Le cache peut contenir les
         // données d'un autre compte MyGes utilisé auparavant : on l'oublie.

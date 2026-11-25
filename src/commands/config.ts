@@ -1,10 +1,11 @@
 import {
     ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelSelectMenuBuilder, ChannelType,
-    ChatInputCommandInteraction, EmbedBuilder, Guild, InteractionContextType, MessageFlags,
+    EmbedBuilder, Guild, InteractionContextType, MessageFlags,
     PermissionFlagsBits, PermissionsBitField, SlashCommandBuilder,
 } from 'discord.js';
-import { Command } from '../core/command';
+import { Command, CommandInteraction } from '../core/command';
 import { getGuildConfig, hasAccount, loadData, saveData } from '../core/store';
+import { publishHub, removeHub } from '../core/hub';
 import { isBotOwner } from '../config';
 import { limitLifetime } from '../utils/collector';
 import { log, logError } from '../utils/logger';
@@ -40,7 +41,7 @@ const command: Command = {
         // (administrateur OU propriétaire) est fait à l'exécution, ci-dessous.
         .setContexts(InteractionContextType.Guild),
 
-    execute: async (interaction: ChatInputCommandInteraction) => {
+    execute: async (interaction: CommandInteraction) => {
         if (!interaction.inCachedGuild()) {
             return interaction.reply({ content: "❌ Cette commande s'utilise uniquement sur un serveur où le bot est présent.", flags: MessageFlags.Ephemeral });
         }
@@ -93,6 +94,14 @@ const command: Command = {
                     { name: '🚀 Salon des mises à jour', value: await channelValue(cfg.updateChannelId) },
                     { name: '👤 Compte MyGes de référence', value: refStatus },
                     {
+                        name: '🧭 Tableau de bord',
+                        value: (cfg.hubChannelId && cfg.hubMessageId
+                            ? `${await channelValue(cfg.hubChannelId)}\n[Voir le message](https://discord.com/channels/${guildId}/${cfg.hubChannelId}/${cfg.hubMessageId})`
+                            : '*non publié*') +
+                            '\nUn message à boutons : les étudiants se connectent et consultent agenda, notes ou panel sans taper de commande. ' +
+                            'Choisir un salon le publie en bas (le précédent est retiré). Conseil : un salon où les membres ne peuvent pas écrire, pour qu\'il reste visible.',
+                    },
+                    {
                         name: '📊 État',
                         value: ready
                             ? '✅ Les alertes projets sont actives sur ce serveur.'
@@ -129,17 +138,27 @@ const command: Command = {
                     .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
             );
 
+            // Sélecteur : salon du tableau de bord (choisir le même salon le republie en bas)
+            const hubRow = new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(
+                new ChannelSelectMenuBuilder()
+                    .setCustomId('cfg_hub')
+                    .setPlaceholder('🧭 Publier le tableau de bord dans…')
+                    .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
+            );
+
             const buttonRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
                 new ButtonBuilder()
                     .setCustomId('cfg_ref_self')
                     .setLabel(isSelfRef ? '✅ Ton compte est la référence' : '👤 Utiliser mon compte comme référence')
                     .setStyle(isSelfRef ? ButtonStyle.Secondary : ButtonStyle.Primary)
                     .setDisabled(!adminHasAccount || isSelfRef),
+                new ButtonBuilder().setCustomId('cfg_hub_remove').setLabel('🗑️ Retirer le tableau de bord').setStyle(ButtonStyle.Secondary)
+                    .setDisabled(!cfg.hubMessageId),
                 new ButtonBuilder().setCustomId('cfg_reset').setLabel('Réinitialiser').setStyle(ButtonStyle.Danger),
                 new ButtonBuilder().setCustomId('cfg_done').setLabel('Terminer').setStyle(ButtonStyle.Success)
             );
 
-            return { embeds: [embed], components: [announceRow, updateRow, buttonRow] };
+            return { embeds: [embed], components: [announceRow, updateRow, hubRow, buttonRow] };
         };
 
         const msg = await interaction.editReply(await render());
@@ -182,6 +201,11 @@ const command: Command = {
                     } else if (i.customId === 'cfg_update') {
                         cfg.updateChannelId = i.values[0];
                         log('CONFIG', `${guild.name} : salon MAJ = ${i.values[0]} (${by})`);
+                    } else if (i.customId === 'cfg_hub') {
+                        const missing = await missingPerms(guild, i.values[0]);
+                        const failure = missing.length ? `droits manquants pour le bot : ${missing.join(', ')}` : await publishHub(guild, cfg, i.values[0]);
+                        if (failure) await i.followUp({ content: `❌ Tableau de bord non publié dans <#${i.values[0]}> : ${failure}.`, flags: MessageFlags.Ephemeral });
+                        else log('CONFIG', `${guild.name} : tableau de bord publié dans ${i.values[0]} (${by})`);
                     }
                 } else if (i.isButton() && i.customId === 'cfg_ref_self') {
                     // Uniquement son propre compte : aucune donnée d'un tiers ne peut
@@ -196,8 +220,13 @@ const command: Command = {
                     if (cfg.referenceUserId !== i.user.id) cfg.projectsSeeded = false;
                     cfg.referenceUserId = i.user.id;
                     log('CONFIG', `${guild.name} : compte de référence = ${i.user.id} (son propre compte)`);
+                } else if (i.isButton() && i.customId === 'cfg_hub_remove') {
+                    await removeHub(i.client, cfg);
+                    log('CONFIG', `${guild.name} : tableau de bord retiré (${by})`);
                 } else if (i.isButton() && i.customId === 'cfg_reset') {
-                    // On repart d'une config vierge pour ce serveur uniquement.
+                    // On repart d'une config vierge pour ce serveur uniquement : le
+                    // tableau de bord, qui n'y serait plus rattaché, est retiré aussi.
+                    await removeHub(i.client, cfg);
                     data.guilds[guildId] = { knownProjectIds: [] };
                     log('CONFIG', `${guild.name} : configuration réinitialisée (${by})`);
                 }

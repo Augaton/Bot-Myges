@@ -13,6 +13,8 @@ export interface PanelSettings {
     sessionsFile: string;
     /** Abonnements d'agenda préparés par le bot (voir utils/feedSeal.ts). */
     feedsDir: string;
+    /** Tickets de connexion déposés par /panel (voir utils/panelTicket.ts). */
+    ticketsDir: string;
 }
 
 export function readSettings(envFile = path.resolve(__dirname, '..', '..', '.env')): PanelSettings {
@@ -33,5 +35,6 @@ export function readSettings(envFile = path.resolve(__dirname, '..', '..', '.env
         tls: cert && key ? { cert, key } : undefined,
         sessionsFile: read('PANEL_SESSIONS_FILE') || path.resolve(path.dirname(envFile), 'panel_sessions.json'),
         feedsDir: read('PANEL_FEEDS_DIR') || path.resolve(path.dirname(envFile), 'panel_feeds'),
+        ticketsDir: read('PANEL_TICKETS_DIR') || path.resolve(path.dirname(envFile), 'panel_tickets'),
     };
 }

@@ -1,4 +1,4 @@
-// Commandes du bot : la liste enregistrée, /help (état, nouveautés) et le prochain cours de /agenda.
+// Commandes du bot : la liste enregistrée, /help (état, nouveautés), le prochain cours de /agenda et le tableau de bord.
 const test = require('node:test');
 const assert = require('node:assert');
 const { dist, json } = require('./helpers');
@@ -81,4 +81,154 @@ test('/agenda, prochain cours : le premier à venir, nom échappé, salle et cam
 
     globalThis.fetch = async () => json(200, { result: [course('Passé', now - hour)] });
     assert.strictEqual(await nextCourseLine('prochain-2', token, now), null);
+});
+
+// --- Tableau de bord (core/hub) ---
+
+const ids = (message) => message.components.map((row) => row.toJSON().components.map((b) => b.custom_id));
+
+test('tableau de bord : un bouton par commande étudiante, jamais /config ni /serveurs ; Panel seulement avec une adresse publique', () => {
+    const { hubCommand, hubMessage } = dist('core/hub.js');
+    assert.strictEqual(hubCommand('hub:agenda'), 'agenda');
+    for (const refused of ['hub:config', 'hub:serveurs', 'hub:', 'agenda', 'share_public', 'hub:agenda:x']) {
+        assert.strictEqual(hubCommand(refused), null, refused);
+    }
+
+    const before = process.env.PANEL_PUBLIC_URL;
+    try {
+        process.env.PANEL_PUBLIC_URL = 'https://panel.example:8443';
+        let message = hubMessage({ user: null });
+        assert.deepStrictEqual(ids(message), [['hub:login', 'hub:agenda', 'hub:notes', 'hub:panel'], ['hub:alertes', 'hub:campus', 'hub:help', 'hub:logout']]);
+        assert.match(message.embeds[0].toJSON().description, /Panel/);
+        assert.deepStrictEqual(message.allowedMentions, { parse: [] });
+        const { commands } = dist('core/registry.js');
+        for (const id of ids(message).flat()) assert.ok(commands.get(hubCommand(id)), id);
+
+        delete process.env.PANEL_PUBLIC_URL;
+        message = hubMessage({ user: null });
+        assert.ok(!ids(message).flat().includes('hub:panel'));
+        assert.doesNotMatch(message.embeds[0].toJSON().description, /Panel/);
+    } finally {
+        if (before === undefined) delete process.env.PANEL_PUBLIC_URL;
+        else process.env.PANEL_PUBLIC_URL = before;
+    }
+});
+
+/** Faux Discord : salons dont on note les messages envoyés, modifiés, supprimés. */
+function fakeDiscord() {
+    const log = [];
+    let next = 1;
+    const channel = (id, { sendable = true, gone = false } = {}) => ({
+        id,
+        isSendable: () => sendable,
+        isTextBased: () => true,
+        send: async () => { const m = { id: `m${next++}` }; log.push(['send', id, m.id]); return m; },
+        messages: {
+            delete: async (m) => { if (gone) throw Object.assign(new Error('Unknown Message'), { code: 10008 }); log.push(['delete', id, m]); },
+            edit: async (m) => { if (gone) throw Object.assign(new Error('Unknown Message'), { code: 10008 }); log.push(['edit', id, m]); },
+        },
+    });
+    const channels = { c1: channel('c1'), c2: channel('c2'), ro: channel('ro', { sendable: false }), gone: channel('gone', { gone: true }) };
+    const fetch = async (id) => channels[id] ?? null;
+    const client = { user: null, channels: { fetch } };
+    const guild = { id: 'g-hub', name: 'Promo', client, channels: { fetch } };
+    return { log, client, guild };
+}
+
+test('tableau de bord : publié en bas, l\'ancien retiré après coup ; un échec garde l\'ancien ; « Retirer » efface tout', async (t) => {
+    quiet(t);
+    const { publishHub, removeHub } = dist('core/hub.js');
+    const { log, client, guild } = fakeDiscord();
+    const cfg = { knownProjectIds: [] };
+
+    assert.strictEqual(await publishHub(guild, cfg, 'c1'), null);
+    assert.deepStrictEqual([cfg.hubChannelId, cfg.hubMessageId], ['c1', 'm1']);
+
+    assert.strictEqual(await publishHub(guild, cfg, 'c2'), null);
+    assert.deepStrictEqual(log, [['send', 'c1', 'm1'], ['send', 'c2', 'm2'], ['delete', 'c1', 'm1']]);
+    assert.deepStrictEqual([cfg.hubChannelId, cfg.hubMessageId], ['c2', 'm2']);
+
+    assert.match(await publishHub(guild, cfg, 'ro'), /introuvable|sans messages/);
+    assert.match(await publishHub(guild, cfg, 'absent'), /introuvable/);
+    assert.deepStrictEqual([cfg.hubChannelId, cfg.hubMessageId], ['c2', 'm2'], 'le tableau en place reste rattaché');
+
+    await removeHub(client, cfg);
+    assert.deepStrictEqual(log.at(-1), ['delete', 'c2', 'm2']);
+    assert.strictEqual(cfg.hubChannelId, undefined);
+    assert.strictEqual(cfg.hubMessageId, undefined);
+
+    // Message déjà supprimé à la main : rien à signaler, le réglage est effacé quand même.
+    const manual = { knownProjectIds: [], hubChannelId: 'gone', hubMessageId: 'm9' };
+    await removeHub(client, manual);
+    assert.strictEqual(manual.hubMessageId, undefined);
+});
+
+test('tableau de bord au démarrage : remis à jour, ou oublié s\'il a été supprimé à la main', async (t) => {
+    quiet(t);
+    const { refreshHubs } = dist('core/hub.js');
+    const { loadData } = dist('core/store.js');
+    const { log, client } = fakeDiscord();
+    const data = loadData();
+    data.guilds['g-live'] = { knownProjectIds: [], hubChannelId: 'c1', hubMessageId: 'm5' };
+    data.guilds['g-gone'] = { knownProjectIds: [], hubChannelId: 'gone', hubMessageId: 'm6' };
+    await refreshHubs(client);
+    assert.deepStrictEqual(log, [['edit', 'c1', 'm5']]);
+    assert.strictEqual(data.guilds['g-live'].hubMessageId, 'm5');
+    assert.strictEqual(data.guilds['g-gone'].hubMessageId, undefined);
+    delete data.guilds['g-live'];
+    delete data.guilds['g-gone'];
+});
+
+/** Faux clic sur un bouton : ce qu'il a répondu ou remplacé. */
+function click(customId, userId) {
+    const out = { replies: [], updates: [], edits: [] };
+    const i = {
+        customId,
+        user: { id: userId, tag: 'x', displayAvatarURL: () => 'https://cdn.discordapp.com/a.png' },
+        client: { user: null },
+        isButton: () => true,
+        isChatInputCommand: () => false,
+        reply: async (r) => out.replies.push(r),
+        update: async (r) => out.updates.push(r),
+        deferReply: async () => {},
+        editReply: async (r) => out.edits.push(r),
+    };
+    return { i, out };
+}
+
+test('se déconnecter depuis le tableau de bord : une confirmation d\'abord, puis tout est effacé', async (t) => {
+    quiet(t);
+    const logout = dist('commands/logout.js');
+    const { loadData, saveData, hasAccount } = dist('core/store.js');
+    const { encrypt } = dist('crypto.js');
+    const data = loadData();
+    data.users['u-hub'] = { user: encrypt('p.nom'), pass: encrypt('secret') };
+    saveData(data);
+
+    let { i, out } = click('hub:logout', 'u-hub');
+    await logout.default.execute(i);
+    assert.ok(hasAccount('u-hub'), 'rien n\'est effacé sans confirmation');
+    assert.ok(out.replies[0].flags);
+    assert.deepStrictEqual(out.replies[0].components[0].toJSON().components.map((b) => b.custom_id), [logout.LOGOUT_CONFIRM_ID]);
+
+    ({ i, out } = click(logout.LOGOUT_CONFIRM_ID, 'u-hub'));
+    await logout.default.execute(i);
+    assert.ok(!hasAccount('u-hub'));
+    assert.deepStrictEqual(out.updates[0].components, [], 'la confirmation est remplacée, sans bouton');
+    assert.match(out.updates[0].embeds[0].toJSON().title, /Déconnexion réussie/);
+});
+
+test('pas encore connecté : depuis un bouton, /notes et /alertes proposent « Se connecter »', async (t) => {
+    quiet(t);
+    const loginRow = (r) => r.components.map((row) => row.toJSON().components.map((b) => b.custom_id));
+
+    let { i, out } = click('hub:notes', 'u-inconnu');
+    await dist('commands/notes.js').default.execute(i);
+    assert.match(out.edits[0].content, /Connecte-toi/);
+    assert.deepStrictEqual(loginRow(out.edits[0]), [['hub:login']]);
+
+    ({ i, out } = click('hub:alertes', 'u-inconnu'));
+    await dist('commands/alertes.js').default.execute(i);
+    assert.deepStrictEqual(loginRow(out.replies[0]), [['hub:login']]);
+    assert.ok(out.replies[0].flags);
 });

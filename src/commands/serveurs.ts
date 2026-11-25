@@ -1,7 +1,7 @@
 import {
-    ChatInputCommandInteraction, EmbedBuilder, InteractionContextType, MessageFlags, PermissionFlagsBits, SlashCommandBuilder,
+    EmbedBuilder, InteractionContextType, MessageFlags, PermissionFlagsBits, SlashCommandBuilder,
 } from 'discord.js';
-import { Command } from '../core/command';
+import { Command, CommandInteraction } from '../core/command';
 import { BOT_VERSION, isBotOwner } from '../config';
 import { hasAccount, loadData, SavedData, sessionCount } from '../core/store';
 import { md } from '../utils/markdown';
@@ -68,7 +68,7 @@ const command: Command = {
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
         .setContexts(InteractionContextType.Guild, InteractionContextType.BotDM),
 
-    execute: async (interaction: ChatInputCommandInteraction) => {
+    execute: async (interaction: CommandInteraction) => {
         if (!isBotOwner(interaction.user.id)) {
             return interaction.reply({ content: '❌ Commande réservée au propriétaire du bot.', flags: MessageFlags.Ephemeral });
         }

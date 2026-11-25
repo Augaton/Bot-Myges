@@ -27,6 +27,9 @@ export interface GuildConfig {
     projectsSeeded?: boolean;
     // Dernière version du bot annoncée sur CE serveur.
     lastAnnouncedVersion?: string;
+    // Tableau de bord à boutons publié par /config (voir core/hub) : son salon et son message.
+    hubChannelId?: string;
+    hubMessageId?: string;
 }
 
 /** Alertes personnelles envoyées en MP (voir tasks/personalAlerts). */

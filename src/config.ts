@@ -46,6 +46,8 @@ export const CHECK_INTERVAL = 60 * 60 * 1000;
 export const DB_FILE = process.env.DB_FILE || path.join(ROOT, 'saved_data.json');
 // Abonnements d'agenda chiffrés : écrits par le bot, servis par le panel (même dossier).
 export const FEEDS_DIR = process.env.PANEL_FEEDS_DIR || path.join(ROOT, 'panel_feeds');
+// Tickets de connexion au panel déposés par /panel (même dossier que celui du panel).
+export const TICKETS_DIR = process.env.PANEL_TICKETS_DIR || path.join(ROOT, 'panel_tickets');
 
 /** Codes d'accès des campus (hors dépôt, voir campus.example.json). */
 export const CAMPUS_FILE = process.env.CAMPUS_FILE || path.join(ROOT, 'campus.json');

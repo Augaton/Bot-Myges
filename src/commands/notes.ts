@@ -1,8 +1,8 @@
 import {
-    ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, ChatInputCommandInteraction,
+    ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle,
     EmbedBuilder, MessageFlags, SlashCommandBuilder, StringSelectMenuBuilder,
 } from 'discord.js';
-import { Command } from '../core/command';
+import { Command, CommandInteraction } from '../core/command';
 import { getGrades } from '../core/mygesData';
 import { yearLabel } from '../utils/schoolYear';
 import { resolveYear, yearAutocomplete, yearOption } from '../utils/yearOption';
@@ -26,7 +26,7 @@ const command: Command = {
 
     autocomplete: yearAutocomplete,
 
-    execute: async (interaction: ChatInputCommandInteraction) => {
+    execute: async (interaction: CommandInteraction) => {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const token = await sessionFor(interaction);
         if (!token) return;
@@ -35,7 +35,9 @@ const command: Command = {
         let year: string;
         let current: string;
         try {
-            const resolved = await resolveYear(interaction, token);
+            // Depuis le tableau de bord, pas d'option : l'année en cours.
+            const asked = interaction.isChatInputCommand() ? interaction.options.getString('annee') : null;
+            const resolved = await resolveYear(interaction.user.id, token, asked);
             if (!resolved) return interaction.editReply('Année indisponible pour ton compte.');
             ({ year, current } = resolved);
             grades = await getGrades(interaction.user.id, token, year);

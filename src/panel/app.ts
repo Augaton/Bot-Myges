@@ -23,6 +23,7 @@ import {
 } from '../utils/documents';
 import { fullName } from '../utils/format';
 import { feedId, openFeed } from '../utils/feedSeal';
+import { takeTicket } from '../utils/panelTicket';
 import { buildIcs, ICS_WEEKS } from '../utils/ics';
 import { log, logError } from '../utils/logger';
 import { fetchPhotoBuffer, imageType } from '../utils/photo';
@@ -208,7 +209,7 @@ export function reloadTls(server: https.Server, tls: TlsFiles) {
     }
 }
 
-export function createPanel({ trustProxy, tls, sessionsFile, feedsDir }: { trustProxy: boolean; tls?: TlsFiles; sessionsFile?: string; feedsDir?: string }): http.Server | https.Server {
+export function createPanel({ trustProxy, tls, sessionsFile, feedsDir, ticketsDir }: { trustProxy: boolean; tls?: TlsFiles; sessionsFile?: string; feedsDir?: string; ticketsDir?: string }): http.Server | https.Server {
     const statics = loadStaticFiles();
     const sessions = new Sessions(sessionsFile);
 
@@ -296,8 +297,36 @@ export function createPanel({ trustProxy, tls, sessionsFile, feedsDir }: { trust
             throw new HttpError(503, UNAVAILABLE);
         }
         release(failureSlots);
-
         // Le mot de passe est bon : reste à vérifier qu'il s'agit bien d'un étudiant.
+        await startSession(res, token, account, username, body?.remember === true);
+    }
+
+    /**
+     * Ticket déposé par /panel sur Discord (voir utils/panelTicket) : l'étudiant
+     * connecté au bot entre sans mot de passe. La session n'est pas gardée au-delà
+     * de la fermeture du navigateur : le lien se redemande en un clic.
+     */
+    async function ticketLogin(req: http.IncomingMessage, res: http.ServerResponse) {
+        assertSameOrigin(req);
+        const body = await readJson(req);
+        const failureSlots: Slot[] = [[failedTotal, 'all'], [failedByNetwork, networkOf(clientAddress(req))]];
+        if (!reserve(failureSlots)) throw new HttpError(429, 'Trop de tentatives. Réessaie dans quelques minutes.');
+        const ticket = ticketsDir && typeof body?.ticket === 'string' ? await takeTicket(ticketsDir, body.ticket) : null;
+        if (!ticket || !VALID_USERNAME.test(ticket.username)) {
+            log('PANEL', 'Lien de connexion refusé (inconnu, déjà servi ou expiré).');
+            throw new HttpError(400, 'Ce lien de connexion a expiré ou a déjà servi. Redemande-le avec /panel sur Discord, ou connecte-toi ci-dessous.');
+        }
+        release(failureSlots);
+        const account = accountKey(ticket.username);
+        if (!reserve([[logins, account]])) throw new HttpError(429, 'Trop de connexions. Réessaie dans quelques minutes.');
+        await startSession(res, ticket.token, account, ticket.username, false);
+    }
+
+    /** Fin commune aux deux connexions : compte étudiant vérifié, session ouverte, cookie posé. */
+    async function startSession(res: http.ServerResponse, token: GesAuthenticationToken, account: string, username: string, remember: boolean) {
+        // Le profil (pour le nom) part en même temps que le rôle : la connexion attend
+        // MyGES une fois, pas deux. Lu pour rien si le compte est refusé, c'est rare.
+        const profileRead = ProfileService.getProfile(token).catch(() => null);
         let role: unknown;
         let uid: number | null;
         try {
@@ -305,6 +334,8 @@ export function createPanel({ trustProxy, tls, sessionsFile, feedsDir }: { trust
             role = me?.normalized_role;
             uid = Number.isFinite(me?.uid) ? me.uid : null;
         } catch (e) {
+            // Token d'un ticket expiré entre-temps : ce n'est pas une panne de MyGES.
+            if (e instanceof MyGesError && e.status === 401) throw new HttpError(400, 'MyGES a refusé la session. Connecte-toi ci-dessous.');
             logError('PANEL', 'Lecture du rôle impossible :', e);
             throw new HttpError(503, UNAVAILABLE);
         }
@@ -313,9 +344,9 @@ export function createPanel({ trustProxy, tls, sessionsFile, feedsDir }: { trust
             throw new HttpError(403, 'Ce panel est réservé aux étudiants.');
         }
 
-        const profile = await ProfileService.getProfile(token).catch(() => null);
+        const profile = await profileRead;
         const name = profile ? fullName({ firstname: profile?.firstname, lastname: profile?.name }) : username;
-        const { cookie, session } = sessions.open(token, name, account, uid, body?.remember === true);
+        const { cookie, session } = sessions.open(token, name, account, uid, remember);
         // Le premier écran en aura besoin : sa lecture commence pendant que la réponse part.
         getYears(session.key, token).catch(() => {});
         log('PANEL', 'Connexion réussie.');
@@ -627,6 +658,7 @@ export function createPanel({ trustProxy, tls, sessionsFile, feedsDir }: { trust
         const feedRoute = url.pathname.match(/^\/agenda\/([A-Za-z0-9_-]{43})\.ics$/);
         if ((req.method === 'GET' || req.method === 'HEAD') && feedRoute) return sendFeed(req, res, feedRoute[1]);
         if (req.method === 'POST' && url.pathname === '/api/login') return login(req, res);
+        if (req.method === 'POST' && url.pathname === '/api/connexion') return ticketLogin(req, res);
         if (req.method === 'POST' && url.pathname === '/api/logout') return logout(req, res);
         if (req.method === 'POST' && url.pathname === '/api/deconnexion-autres') return logoutOthers(req, res);
         const teamRoute = url.pathname.match(/^\/api\/projets\/([\w-]{1,40})\/equipes\/([\w-]{1,40})\/(rejoindre|quitter)$/);
