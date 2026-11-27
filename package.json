@@ -1,6 +1,6 @@
 {
   "name": "botdiscordmyges",
-  "version": "4.5.1",
+  "version": "4.6.0",
   "description": "Bot Discord MyGes (agenda, notes, projets) — multi-serveurs",
   "private": true,
   "main": "dist/index.js",
