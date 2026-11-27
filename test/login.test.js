@@ -107,3 +107,33 @@ test('pulvérisation : plafond global d\'échecs, tous comptes et identifiants c
     assert.ok(calls.length <= 30);
 });
 
+
+test('connexion : les projets ne sont relus que pour un compte de référence pas encore amorcé', async (t) => {
+    // Une heure plus tard : le plafond global d'échecs rempli plus haut est retombé.
+    t.mock.timers.enable({ apis: ['Date'], now: Date.now() + 60 * 60_000 });
+    const mygesData = dist('core/mygesData.js');
+    const urls = [];
+    globalThis.fetch = async (url) => {
+        urls.push(String(url));
+        return String(url).includes('oauth') ? accepted() : json(200, { result: [] });
+    };
+    const projectReads = () => urls.filter((u) => u.includes('/projects')).length;
+    const settle = async (until = () => false) => {
+        for (let i = 0; i < 200 && !until(); i++) await new Promise(setImmediate);
+    };
+    const data = store.loadData();
+    data.guilds.annonces = { announcementChannelId: 'salon', referenceUserId: 'ref-login', knownProjectIds: [], projectsSeeded: false };
+    store.saveData(data);
+
+    // Le compte de référence se connecte : ses projets sont lus tout de suite.
+    await submit('ref-login', 'e.cinq');
+    await settle(() => store.loadData().guilds.annonces.projectsSeeded);
+    assert.strictEqual(projectReads(), 1);
+
+    // Un autre étudiant se connecte : rien à relire, même si le serveur était à réamorcer.
+    store.loadData().guilds.annonces.projectsSeeded = false;
+    mygesData.forgetUser('ref-login');
+    await submit('autre-login', 'f.six');
+    await settle();
+    assert.strictEqual(projectReads(), 1);
+});

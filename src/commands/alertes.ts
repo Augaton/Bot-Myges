@@ -25,7 +25,9 @@ const command: Command = {
             const alerts = getUserAlerts(loadData(), userId);
             const embed = new EmbedBuilder()
                 .setTitle('🔔 Tes alertes en MP')
-                .setDescription('Je t\'écris en message privé, à toi seul.')
+                .setDescription(alerts.dmClosed
+                    ? '⚠️ **Mon dernier MP n\'a pas pu t\'être remis** : tes messages privés sont fermés. En attendant, je ne regarde MyGES qu\'une fois par jour. Ouvre-les, puis clique sur « Tester les MP ».'
+                    : 'Je t\'écris en message privé, à toi seul.')
                 .setColor(0x5865f2)
                 .addFields(
                     {
@@ -92,11 +94,20 @@ const command: Command = {
 
                 if (i.customId === 'alert_test') {
                     await i.deferUpdate();
-                    const ok = await sendDM(i.client, userId, { content: '✅ Test réussi : tu recevras bien tes alertes ici.' });
+                    const result = await sendDM(i.client, userId, { content: '✅ Test réussi : tu recevras bien tes alertes ici.' });
+                    // MP rouverts : les alertes reprennent leur rythme normal (voir UserAlerts.dmClosed).
+                    const data = loadData();
+                    if (result === 'sent' && data.users[userId] && data.alerts[userId]?.dmClosed) {
+                        delete data.alerts[userId].dmClosed;
+                        saveData(data);
+                        await i.editReply(view());
+                    }
                     await i.followUp({
-                        content: ok
+                        content: result === 'sent'
                             ? '📨 MP envoyé, regarde tes messages privés !'
-                            : "❌ Impossible de t'écrire en MP. Active « Messages privés » dans les paramètres de confidentialité du serveur, puis réessaie.",
+                            : result === 'closed'
+                                ? "❌ Impossible de t'écrire en MP. Active « Messages privés » dans les paramètres de confidentialité du serveur, puis réessaie."
+                                : '⚠️ Discord n\'a pas pu remettre le MP pour le moment. Réessaie dans un instant.',
                         flags: MessageFlags.Ephemeral,
                     });
                     return;

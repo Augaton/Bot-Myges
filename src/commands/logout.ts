@@ -9,6 +9,34 @@ import { dropTicket } from '../utils/panelTicket';
 // Bouton « Oui, me déconnecter », routé globalement (voir index.ts).
 export const LOGOUT_CONFIRM_ID = 'logout:oui';
 
+/**
+ * Efface tout ce que le bot sait d'un utilisateur : session et cache, identifiants,
+ * alertes, liens d'abonnement et de connexion au panel. Il cesse aussi de servir de
+ * compte de référence : se déconnecter doit couper net l'usage de ses données.
+ * Renvoie le nombre de serveurs dont il était la référence.
+ */
+export function forgetAccount(userId: string): number {
+    // 1. Mémoire vive : session active, données en cache.
+    closeSession(userId);
+    forgetUser(userId);
+
+    // 2. Disque : identifiants, alertes et liens.
+    removeFeed(userId); // le lien d'abonnement cesse de fonctionner
+    dropTicket(userId); // le lien de connexion au panel aussi
+    const data = loadData();
+    delete data.users[userId];
+    delete data.alerts[userId];
+    let removedRefs = 0;
+    for (const cfg of Object.values(data.guilds)) {
+        if (cfg.referenceUserId === userId) {
+            delete cfg.referenceUserId;
+            removedRefs++;
+        }
+    }
+    saveData(data);
+    return removedRefs;
+}
+
 const command: Command = {
     data: new SlashCommandBuilder()
         .setName('logout')
@@ -41,30 +69,11 @@ const command: Command = {
             });
         }
 
-        // 2. On supprime de la mémoire vive (session active, données en cache)
-        closeSession(interaction.user.id);
-        forgetUser(interaction.user.id);
-
-        // 3. On supprime du disque (identifiants et alertes)
-        removeFeed(interaction.user.id); // le lien d'abonnement cesse de fonctionner
-        dropTicket(interaction.user.id); // le lien de connexion au panel aussi
-        const data = loadData();
-        delete data.users[interaction.user.id];
-        delete data.alerts[interaction.user.id];
-
-        // 4. On retire ce compte de toute config où il servait de référence :
-        // se déconnecter doit couper net l'usage de ses données.
-        let removedRefs = 0;
-        for (const cfg of Object.values(data.guilds)) {
-            if (cfg.referenceUserId === interaction.user.id) {
-                delete cfg.referenceUserId;
-                removedRefs++;
-            }
-        }
-        saveData(data); // Sauvegarde immédiate
+        // 2. On efface tout.
+        const removedRefs = forgetAccount(interaction.user.id);
         log('AUTH', `${interaction.user.id} déconnecté${removedRefs > 0 ? ` : retiré comme compte de référence sur ${removedRefs} serveur(s)` : ''}.`);
 
-        // 5. Message de confirmation rassurant
+        // 3. Message de confirmation rassurant
         const embed = new EmbedBuilder()
             .setTitle('👋 Déconnexion réussie')
             .setDescription('Tes identifiants ont été **supprimés** de ma base de données.\nJe ne pourrai plus accéder à ton compte MyGes.\nSi le panel est ouvert, sa session dure jusqu\'à ce que tu t\'y déconnectes ou fermes ton navigateur.')

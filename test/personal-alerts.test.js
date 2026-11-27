@@ -142,3 +142,88 @@ test('reconnexion à un autre compte pendant une lecture : rien de l\'ancien com
     await runPersonalCheck(client);
     assert.strictEqual(store.loadData().alerts.u5.knownGrades, undefined);
 });
+
+test('MP non remis : une panne de Discord fait réessayer, des MP fermés espacent les lectures', async (t) => {
+    t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-05T10:00:00Z') });
+    t.mock.method(console, 'log', () => {});
+    t.mock.method(console, 'error', () => {});
+    for (const id of ['u1', 'u2', 'u3', 'u4', 'u5']) register(id, { grades: false, absences: false, reminders: false, agenda: false, digest: false });
+    register('u6', { grades: true, absences: false, reminders: false, agenda: false, digest: false });
+
+    let grades = [12];
+    let calls = [];
+    globalThis.fetch = async (url) => {
+        const u = String(url);
+        calls.push(u);
+        if (u.includes('oauth')) return login();
+        if (u.includes('/me/years')) return json(200, { result: [2026] });
+        if (u.includes('/grades')) return json(200, { result: [{ course: 'Anglais', trimester_name: 'T1', grades }] });
+        throw new Error(`fetch inattendu : ${u}`);
+    };
+    let failure = null;
+    const sent = [];
+    const flaky = { users: { fetch: async () => ({ send: async (payload) => {
+        if (failure) throw failure;
+        sent.push(payload);
+    } }) } };
+    const known = () => store.loadData().alerts.u6.knownGrades.length;
+    const pass = async () => {
+        t.mock.timers.tick(61 * 60_000);
+        calls = [];
+        await runPersonalCheck(flaky);
+    };
+
+    await runPersonalCheck(flaky); // premier relevé : mémorisé sans MP
+    assert.strictEqual(known(), 1);
+
+    // Discord en panne au moment d'annoncer la note : elle n'est pas perdue.
+    grades = [12, 15];
+    failure = new Error('ECONNRESET');
+    await pass();
+    assert.strictEqual(sent.length, 0);
+    assert.strictEqual(known(), 1);
+
+    failure = null;
+    await pass();
+    assert.strictEqual(sent.length, 1);
+    assert.match(sent[0].embeds[0].data.fields[0].value, /Note : \*\*15\*\*\/20/);
+    // Un bouton sous le MP ouvre /notes, routé comme ceux du tableau de bord.
+    assert.deepStrictEqual(sent[0].components[0].toJSON().components.map((b) => b.custom_id), ['hub:notes']);
+    assert.strictEqual(known(), 2);
+
+    // MP fermés : la note est abandonnée (réessayer n'y changerait rien)...
+    grades = [12, 15, 9];
+    failure = Object.assign(new Error('Cannot send messages to this user'), { code: 50007 });
+    await pass();
+    assert.strictEqual(known(), 3);
+    assert.strictEqual(store.loadData().alerts.u6.dmClosed, true);
+
+    // ... et MyGes n'est plus relu qu'une fois par jour.
+    await pass();
+    assert.ok(!calls.some((u) => u.includes('/grades')));
+    t.mock.timers.tick(24 * H);
+    failure = null;
+    grades = [12, 15, 9, 18];
+    await pass();
+    assert.ok(calls.some((u) => u.includes('/grades')));
+    // Le MP est passé : les MP sont rouverts, retour à une lecture par heure.
+    assert.strictEqual(sent.length, 2);
+    assert.strictEqual(store.loadData().alerts.u6.dmClosed, undefined);
+});
+
+test('MP non remis : fermé, panne passagère ou refus durable', async (t) => {
+    t.mock.method(console, 'log', () => {});
+    t.mock.method(console, 'error', () => {});
+    const { sendDM } = dist('utils/dm.js');
+    const err = (fields) => Object.assign(new Error('refus'), fields);
+    const sendFails = (e) => ({ users: { fetch: async () => ({ send: async () => { throw e; } }) } });
+    const result = (e) => sendDM(sendFails(e), 'u', {});
+
+    assert.strictEqual(await result(err({ code: 50007, status: 403 })), 'closed'); // MP fermés
+    const gone = { users: { fetch: async () => { throw err({ code: 10013, status: 404 }); } } };
+    assert.strictEqual(await sendDM(gone, 'u', {}), 'closed'); // compte supprimé
+    assert.strictEqual(await result(err({ code: 50035, status: 400 })), 'failed'); // retenter échouerait encore
+    assert.strictEqual(await result(err({ status: 503 })), 'transient');
+    assert.strictEqual(await result(err({ status: 429 })), 'transient');
+    assert.strictEqual(await result(new Error('ECONNRESET')), 'transient');
+});

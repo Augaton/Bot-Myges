@@ -32,7 +32,7 @@ L'agenda colore chaque cours selon son campus, avec l'adresse et l'itinéraire, 
 
 ## Alertes en message privé
 
-Le bot passe toutes les 15 minutes, avec au plus une lecture de MyGES par heure et par personne. Chacun règle ses alertes avec `/alertes` :
+Le bot passe toutes les 15 minutes, avec au plus une lecture de MyGES par heure et par personne, et une par jour pour qui a fermé ses MP. Une alerte qu'une panne de Discord empêche de remettre repart au passage suivant. Chacun règle ses alertes avec `/alertes` :
 
 - les nouvelles notes ;
 - les rappels de projets, 24 h puis 2 h avant l'échéance ;
@@ -41,7 +41,7 @@ Le bot passe toutes les 15 minutes, avec au plus une lecture de MyGES par heure 
 
 ## Sécurité
 
-Pour accéder à MyGES, le bot garde les identifiants de chaque utilisateur sur la machine qui l'héberge. Ils sont chiffrés en AES-256-GCM avec une clé dérivée par scrypt, mais l'hébergeur détient cette clé. Ne te connecte donc qu'à une instance dont tu fais confiance à l'hébergeur. `/logout` supprime tes données.
+Pour accéder à MyGES, le bot garde les identifiants de chaque utilisateur sur la machine qui l'héberge. Ils sont chiffrés en AES-256-GCM avec une clé dérivée par scrypt, mais l'hébergeur détient cette clé. Ne te connecte donc qu'à une instance dont tu fais confiance à l'hébergeur. `/logout` supprime tes données. Si MyGES refuse ton mot de passe enregistré, le bot ne le réessaie qu'une fois par jour, et supprime tes données au bout de 30 jours de refus sans nouveau `/login`.
 
 ## Installation
 

@@ -23,7 +23,7 @@ test('une session est rétablie à la demande, en une seule connexion', async ()
     assert.strictEqual(a.access_token, 'abc+def'); // token gardé brut, « + » compris
 });
 
-test('identifiants refusés : plus aucune tentative avant un nouveau /login', async () => {
+test('identifiants refusés : plus aucune tentative dans la journée', async () => {
     register('u2');
     const calls = mockFetch([json(401, {})]);
     assert.strictEqual(await store.getSession('u2'), null);

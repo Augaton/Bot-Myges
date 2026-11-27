@@ -294,7 +294,7 @@ const dmClient = () => {
     return { dms, users: { fetch: async (id) => ({ send: async (payload) => dms.push({ id, title: payload.embeds[0].data.title }) }) } };
 };
 
-test('mot de passe refusé : un seul MP, plus aucun essai, et un nouveau /login réarme le message', async (t) => {
+test('mot de passe refusé : un seul MP, plus d\'essai dans la journée, et un nouveau /login réarme le message', async (t) => {
     quiet(t);
     clearAccounts();
     const client = dmClient();
@@ -616,4 +616,79 @@ test('annonce de mise à jour : une version corrective n\'est pas annoncée, une
     const after = store.loadData().guilds;
     assert.strictEqual(after.correctif.lastAnnouncedVersion, BOT_VERSION, 'mémorisée sans annonce');
     assert.strictEqual(after.nouvelle.lastAnnouncedVersion, BOT_VERSION);
+});
+
+test('mot de passe refusé : un essai par jour au plus, même après un redémarrage, compte oublié au bout de 30 jours', async (t) => {
+    quiet(t);
+    clearAccounts();
+    t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-01T10:00:00Z') });
+    const client = dmClient();
+    account('perime');
+    guild('perime-serveur', 'perime');
+    store.closeSession('perime');
+    const seen = kordis({ login: () => json(401, {}) });
+    await runPersonalCheck(client);
+    assert.strictEqual(seen.logins, 1);
+    const refusedAt = store.loadData().users.perime.refusedAt;
+    assert.ok(refusedAt);
+
+    // closeSession efface l'échec gardé en mémoire, comme un redémarrage du bot.
+    store.closeSession('perime');
+    assert.strictEqual(store.loginFailure('perime'), 'bad-credentials');
+    assert.strictEqual(await store.getSession('perime'), null);
+    t.mock.timers.tick(23 * H);
+    await runPersonalCheck(client);
+    assert.strictEqual(seen.logins, 1, 'pas de nouvel essai dans la journée');
+
+    t.mock.timers.tick(2 * H);
+    await runPersonalCheck(client);
+    await runPersonalCheck(client);
+    assert.strictEqual(seen.logins, 2, 'un essai le lendemain, un seul');
+    assert.strictEqual(store.loadData().users.perime.refusedAt, refusedAt, 'le délai de 30 jours court depuis le premier refus');
+
+    t.mock.timers.tick(28 * 24 * H);
+    await runPersonalCheck(client);
+    assert.ok(store.hasAccount('perime'));
+
+    t.mock.timers.tick(24 * H);
+    await runPersonalCheck(client);
+    assert.ok(!store.hasAccount('perime'));
+    assert.strictEqual(store.loadData().alerts.perime, undefined);
+    assert.strictEqual(store.loadData().guilds['perime-serveur'].referenceUserId, undefined);
+});
+
+test('refus puis connexion réussie le lendemain : MyGes s\'était trompé, le refus est oublié', async (t) => {
+    quiet(t);
+    clearAccounts();
+    t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-01T10:00:00Z') });
+    account('erreur');
+    store.closeSession('erreur');
+    kordis({ login: () => json(401, {}) }); // panne de Kordis qui répond 401 à tout le monde
+    assert.strictEqual(await store.getSession('erreur'), null);
+    store.loadData().users.erreur.refusedNotified = true;
+
+    t.mock.timers.tick(25 * H);
+    kordis();
+    assert.ok(await store.getSession('erreur'));
+    const creds = store.loadData().users.erreur;
+    assert.strictEqual(creds.refusedAt, undefined);
+    assert.strictEqual(creds.retriedAt, undefined);
+    assert.strictEqual(creds.refusedNotified, undefined, 'un vrai refus, plus tard, sera de nouveau signalé');
+    assert.strictEqual(store.loginFailure('erreur'), null);
+});
+
+test('mot de passe refusé puis nouveau /login : le refus enregistré ne bloque pas les nouveaux identifiants', async (t) => {
+    quiet(t);
+    clearAccounts();
+    account('relance');
+    store.closeSession('relance');
+    let seen = kordis({ login: () => json(401, {}) });
+    assert.strictEqual(await store.getSession('relance'), null);
+    assert.ok(store.loadData().users.relance.refusedAt);
+
+    account('relance'); // nouveau /login : nouvel objet d'identifiants, sans refus
+    store.closeSession('relance');
+    seen = kordis();
+    assert.ok(await store.getSession('relance'));
+    assert.strictEqual(seen.logins, 1);
 });

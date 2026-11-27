@@ -177,9 +177,13 @@ export async function handleLoginModal(interaction: ModalSubmitInteraction) {
 
         log('AUTH', `Connexion réussie (${who})`);
 
-        // Premier check pour charger les données (projets, etc.). Volontairement
-        // non attendu : la réponse à l'utilisateur ne doit pas dépendre de l'API.
-        void runProjectCheck(interaction.client);
+        // Compte de référence d'un serveur qui n'a pas encore lu ses projets : on les
+        // lit tout de suite plutôt qu'au passage horaire. Pour les autres, ce passage
+        // interrogerait MyGes pour tous les serveurs sans rien leur apporter.
+        // Volontairement non attendu : la réponse ne doit pas dépendre de l'API.
+        if (Object.values(data.guilds).some((g) => g.referenceUserId === interaction.user.id && !g.projectsSeeded)) {
+            void runProjectCheck(interaction.client);
+        }
     } catch (error) {
         // Un mot de passe refusé n'est pas une panne : le message doit le dire,
         // sinon l'utilisateur réessaie en boucle des identifiants corrects.

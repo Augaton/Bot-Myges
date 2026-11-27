@@ -54,6 +54,13 @@ export function buildChangelogEmbed(client: Client): EmbedBuilder {
                     (panelLink ? `\n• Accès : ${panelLink}` : ''),
             },
             {
+                name: '🔔 Alertes en MP',
+                value:
+                    '• Un bouton sous chaque alerte de note ou d\'agenda ouvre directement `/notes` ou `/agenda`.\n' +
+                    '• Une alerte bloquée par une panne de Discord repart au passage suivant, au lieu d\'être perdue.\n' +
+                    '• Mot de passe MyGES changé ? Refais `/login` : après 30 jours de refus, tes données sont supprimées.',
+            },
+            {
                 name: '✅ Aucune action requise',
                 value: '• Ton abonnement calendrier et tes alertes restent tels quels.',
             }

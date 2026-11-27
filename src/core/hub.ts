@@ -29,18 +29,27 @@ const ROWS: { command: string; label: string; style: ButtonStyle }[][] = [
         { command: 'logout', label: '🚪 Se déconnecter', style: ButtonStyle.Secondary },
     ],
 ];
-const COMMANDS = new Set(ROWS.flat().map((b) => b.command));
+const BUTTONS = new Map(ROWS.flat().map((b) => [b.command, b]));
 
 /** Commande lancée par un bouton du tableau de bord, ou null si ce n'en est pas un. */
 export function hubCommand(customId: string): string | null {
     if (!customId.startsWith(HUB_PREFIX)) return null;
     const name = customId.slice(HUB_PREFIX.length);
-    return COMMANDS.has(name) ? name : null;
+    return BUTTONS.has(name) ? name : null;
+}
+
+/**
+ * Bouton d'une commande du tableau de bord. Routé partout, MP compris : il sert aussi
+ * hors du tableau (« Se connecter » à qui doit se reconnecter, « Notes » sous une alerte…).
+ */
+export function hubButton(command: string): ButtonBuilder {
+    const button = BUTTONS.get(command);
+    if (!button) throw new Error(`Pas de bouton de tableau de bord pour /${command}.`);
+    return new ButtonBuilder().setCustomId(`${HUB_PREFIX}${command}`).setLabel(button.label).setStyle(button.style);
 }
 
 /** Bouton « Se connecter » : aussi proposé à qui doit se (re)connecter, n'importe où. */
-export const loginButton = () =>
-    new ButtonBuilder().setCustomId(`${HUB_PREFIX}login`).setLabel('🔐 Se connecter').setStyle(ButtonStyle.Success);
+export const loginButton = () => hubButton('login');
 
 /** Le message du tableau de bord, tel que publié ou remis à jour. */
 export function hubMessage(client: Client) {
@@ -62,8 +71,7 @@ export function hubMessage(client: Client) {
         .setThumbnail(client.user?.displayAvatarURL() || null)
         .setFooter({ text: 'Les commandes (/agenda, /notes…) marchent aussi. Service non officiel, sans lien avec MyGES.' });
     const components = ROWS.map((row) => new ActionRowBuilder<ButtonBuilder>().addComponents(
-        row.filter((b) => panel || b.command !== 'panel').map((b) =>
-            new ButtonBuilder().setCustomId(`${HUB_PREFIX}${b.command}`).setLabel(b.label).setStyle(b.style)),
+        row.filter((b) => panel || b.command !== 'panel').map((b) => hubButton(b.command)),
     ));
     return { embeds: [embed], components, allowedMentions: { parse: [] } };
 }

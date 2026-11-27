@@ -6,11 +6,13 @@
 //  • un MP quand un cours de la semaine à venir est annulé, déplacé, ajouté ou
 //    change de salle ;
 //  • sur demande, un MP chaque matin avec les cours du jour.
-import { Client, EmbedBuilder } from 'discord.js';
+import { ActionRowBuilder, ButtonBuilder, Client, EmbedBuilder, MessageCreateOptions } from 'discord.js';
+import { forgetAccount } from '../commands/logout';
+import { hubButton } from '../core/hub';
 import { getAbsences, getAssignments, getCurrentYearFor, getGrades, getTimetable } from '../core/mygesData';
 import { getSession, getUserAlerts, loadData, loginFailure, saveData, SavedData, UserAlerts } from '../core/store';
 import { decrypt, encrypt, fingerprint } from '../crypto';
-import { sendDM } from '../utils/dm';
+import { DmResult, sendDM } from '../utils/dm';
 import { courseName, coursePlace, getCourseIcon, hasDeadlineTime, snippet } from '../utils/format';
 import { log, logError } from '../utils/logger';
 import { md } from '../utils/markdown';
@@ -21,6 +23,12 @@ import type { GesAuthenticationToken } from '../myges/types/auth';
 // et agenda ne sont pour autant relus auprès de MyGes qu'une fois par heure et par personne.
 export const PERSONAL_CHECK_INTERVAL = 15 * 60 * 1000;
 const REFRESH_MS = 60 * 60 * 1000;
+// MP fermés : rien ne peut être remis, MyGes n'est donc relu qu'une fois par jour,
+// jusqu'à ce qu'un MP passe de nouveau (alerte, ou « Tester les MP » dans /alertes).
+const CLOSED_DM_REFRESH_MS = 24 * 60 * 60 * 1000;
+// Mot de passe refusé depuis ce délai sans connexion réussie ni nouveau /login : le
+// compte est oublié, comme après un /logout. Ses identifiants ne servent plus à rien.
+const REFUSED_FORGET_MS = 30 * 24 * 60 * 60 * 1000;
 // Pause entre deux utilisateurs interrogeant MyGes : on reste discret.
 const PAUSE_BETWEEN_USERS_MS = 2_000;
 
@@ -57,6 +65,23 @@ interface UserCheck {
      */
     current: () => boolean;
 }
+
+/**
+ * Envoie un MP d'alerte et retient si les MP de l'utilisateur sont fermés. Après un
+ * envoi, l'appelant renvoie toujours « changé », pour que `alerts` soit enregistré.
+ * L'état est mis à jour avant l'envoi (rien ne doit le modifier pendant l'attente de
+ * Discord) : sur `transient`, à l'appelant de le remettre comme avant, s'il n'a pas
+ * bougé entre-temps, pour que l'alerte reparte au passage suivant.
+ */
+async function notify({ client, userId, alerts, current }: UserCheck, payload: MessageCreateOptions): Promise<DmResult> {
+    const result = await sendDM(client, userId, payload);
+    if (current() && result === 'closed') alerts.dmClosed = true;
+    if (current() && result === 'sent') delete alerts.dmClosed;
+    return result;
+}
+
+/** Bouton qui ouvre la commande sous le MP (routé comme ceux du tableau de bord). */
+const openButton = (command: string) => [new ActionRowBuilder<ButtonBuilder>().addComponents(hubButton(command))];
 
 // ---------------------------------------------------------------- Notes
 
@@ -123,7 +148,8 @@ function gradesEmbed(events: GradeEvent[]): EmbedBuilder {
 }
 
 /** Compare les notes à celles déjà vues ; envoie un MP s'il y en a de nouvelles. Vrai si l'état a changé. */
-async function checkGrades({ client, userId, alerts, current }: UserCheck, token: GesAuthenticationToken): Promise<boolean> {
+async function checkGrades(check: UserCheck, token: GesAuthenticationToken): Promise<boolean> {
+    const { userId, alerts, current } = check;
     // L'année en cours selon MyGes : à la rentrée, l'année précédente reste suivie tant
     // que la nouvelle n'est pas ouverte, rattrapages compris. Le changement d'année, lui,
     // est mémorisé sans MP (voir plus bas).
@@ -147,9 +173,13 @@ async function checkGrades({ client, userId, alerts, current }: UserCheck, token
 
     // On ajoute sans jamais retirer : une note qui disparaît un instant (aléa
     // de l'API) puis réapparaît n'est pas annoncée une seconde fois.
-    alerts.knownGrades = [...known, ...new Set(fresh.map((k) => k.key))];
-    await sendDM(client, userId, { embeds: [gradesEmbed(fresh.map((k) => k.event))] });
-    log('ALERTES', `${userId} : ${fresh.length} nouvelle(s) note(s) signalée(s) en MP.`);
+    const previous = alerts.knownGrades;
+    const marked = (alerts.knownGrades = [...known, ...new Set(fresh.map((k) => k.key))]);
+    const result = await notify(check, { embeds: [gradesEmbed(fresh.map((k) => k.event))], components: openButton('notes') });
+    if (result === 'sent') log('ALERTES', `${userId} : ${fresh.length} nouvelle(s) note(s) signalée(s) en MP.`);
+    // Panne de Discord : ces notes repartiront à la prochaine lecture, sauf si /alertes
+    // ou un nouveau /login a touché à la liste entre-temps.
+    if (result === 'transient' && alerts.knownGrades === marked) alerts.knownGrades = previous;
     return true;
 }
 
@@ -190,7 +220,8 @@ function absencesEmbed(events: AbsenceEvent[]): EmbedBuilder {
 }
 
 /** Compare les absences à celles déjà vues ; envoie un MP s'il y en a de nouvelles. Vrai si l'état a changé. */
-async function checkAbsences({ client, userId, alerts, current }: UserCheck, token: GesAuthenticationToken): Promise<boolean> {
+async function checkAbsences(check: UserCheck, token: GesAuthenticationToken): Promise<boolean> {
+    const { userId, alerts, current } = check;
     const year = await getCurrentYearFor(userId, token);
     const raw = await getAbsences(userId, token, year);
     if (!Array.isArray(raw) || !current()) return false;
@@ -207,9 +238,11 @@ async function checkAbsences({ client, userId, alerts, current }: UserCheck, tok
     const fresh = keyed.filter((k) => !known.has(k.key));
     if (!fresh.length) return false;
 
-    alerts.knownAbsences = [...known, ...new Set(fresh.map((k) => k.key))];
-    await sendDM(client, userId, { embeds: [absencesEmbed(fresh.map((k) => k.event))] });
-    log('ALERTES', `${userId} : ${fresh.length} nouvelle(s) absence(s) signalée(s) en MP.`);
+    const previous = alerts.knownAbsences;
+    const marked = (alerts.knownAbsences = [...known, ...new Set(fresh.map((k) => k.key))]);
+    const result = await notify(check, { embeds: [absencesEmbed(fresh.map((k) => k.event))] });
+    if (result === 'sent') log('ALERTES', `${userId} : ${fresh.length} nouvelle(s) absence(s) signalée(s) en MP.`);
+    if (result === 'transient' && alerts.knownAbsences === marked) alerts.knownAbsences = previous; // voir checkGrades
     return true;
 }
 
@@ -291,7 +324,8 @@ function readReminded(alerts: UserAlerts): Record<string, number> {
 }
 
 /** Envoie les rappels arrivés à échéance. Vrai si l'état a changé. */
-async function checkReminders({ client, userId, alerts, memo, current }: UserCheck, token: GesAuthenticationToken | null): Promise<boolean> {
+async function checkReminders(check: UserCheck, token: GesAuthenticationToken | null): Promise<boolean> {
+    const { userId, alerts, memo, current } = check;
     const now = Date.now();
     if (token && (!memo.projects || now - memo.projects.at >= REFRESH_MS)) {
         try {
@@ -324,10 +358,20 @@ async function checkReminders({ client, userId, alerts, memo, current }: UserChe
     if (!due.length) return changed;
 
     // Un MP accepte jusqu'à 10 embeds.
+    const marked = alerts.remindedSnapshot;
+    let sent = 0;
+    let retry = false;
     for (let i = 0; i < due.length; i += 10) {
-        await sendDM(client, userId, { embeds: due.slice(i, i + 10).map((r) => reminderEmbed(r.deadline, r.threshold)) });
+        const batch = due.slice(i, i + 10);
+        const result = await notify(check, { embeds: batch.map((r) => reminderEmbed(r.deadline, r.threshold)) });
+        if (result === 'sent') sent += batch.length;
+        if (result !== 'transient') continue;
+        // Panne de Discord : ces rappels repartiront au passage suivant, dans un quart d'heure.
+        for (const r of batch) delete reminded[r.id];
+        retry = true;
     }
-    log('ALERTES', `${userId} : ${due.length} rappel(s) de rendu envoyé(s) en MP.`);
+    if (retry && alerts.remindedSnapshot === marked) alerts.remindedSnapshot = encrypt(JSON.stringify(reminded));
+    if (sent) log('ALERTES', `${userId} : ${sent} rappel(s) de rendu envoyé(s) en MP.`);
     return true;
 }
 
@@ -480,7 +524,8 @@ function sameSnapshot(next: AgendaSnapshot, previous: AgendaSnapshot | null, now
 }
 
 /** Signale les changements d'agenda et envoie le programme du jour. Vrai si l'état a changé. */
-async function checkAgenda({ client, userId, alerts, memo, current }: UserCheck, token: GesAuthenticationToken): Promise<boolean> {
+async function checkAgenda(check: UserCheck, token: GesAuthenticationToken): Promise<boolean> {
+    const { userId, alerts, memo, current } = check;
     const now = Date.now();
     // Bornes calées sur minuit : stables toute la journée, ce qui évite de
     // réécrire la lecture mémorisée à chaque passage.
@@ -493,6 +538,7 @@ async function checkAgenda({ client, userId, alerts, memo, current }: UserCheck,
     // modifier une fois qu'on attend Discord.
     let changed = false;
     let changes: AgendaChange[] = [];
+    const previousSnapshot = alerts.agendaSnapshot;
     if (alerts.agenda) {
         const previous = readSnapshot(alerts);
         const result = agendaChanges(courses, previous, now, until);
@@ -514,14 +560,19 @@ async function checkAgenda({ client, userId, alerts, memo, current }: UserCheck,
     }
 
     if (changes.length) {
-        await sendDM(client, userId, { embeds: [agendaEmbed(changes)] });
-        log('ALERTES', `${userId} : ${changes.length} changement(s) d'agenda signalé(s) en MP.`);
+        const marked = alerts.agendaSnapshot;
+        const result = await notify(check, { embeds: [agendaEmbed(changes)], components: openButton('agenda') });
+        if (result === 'sent') log('ALERTES', `${userId} : ${changes.length} changement(s) d'agenda signalé(s) en MP.`);
+        // Panne de Discord : la lecture précédente est remise, la prochaine retrouvera ces changements.
+        if (result === 'transient' && alerts.agendaSnapshot === marked) alerts.agendaSnapshot = previousSnapshot;
     }
     if (today.length) {
-        await sendDM(client, userId, { embeds: [digestEmbed(today)] });
-        log('ALERTES', `${userId} : programme du jour envoyé en MP (${today.length} cours).`);
+        const sentOn = alerts.digestSentOn;
+        const result = await notify(check, { embeds: [digestEmbed(today)], components: openButton('agenda') });
+        if (result === 'sent') log('ALERTES', `${userId} : programme du jour envoyé en MP (${today.length} cours).`);
+        if (result === 'transient' && alerts.digestSentOn === sentOn) delete alerts.digestSentOn; // réessayé au passage suivant
     }
-    return changed;
+    return changed || changes.length > 0 || today.length > 0;
 }
 
 // ---------------------------------------------------------------- Cycle
@@ -550,7 +601,7 @@ async function warnRefused(client: Client, data: SavedData, userId: string, cred
         embeds: [new EmbedBuilder()
             .setTitle('🔒 Alertes en pause')
             .setColor(0xffa500)
-            .setDescription('MyGES refuse ton mot de passe enregistré. Tes alertes sont en pause, et le bot ne réessaie plus pour éviter de faire verrouiller ton compte. Refais `/login` pour les relancer.')],
+            .setDescription('MyGES refuse ton mot de passe enregistré. Tes alertes sont en pause, et le bot ne réessaie plus qu\'une fois par jour pour éviter de faire verrouiller ton compte. Refais `/login` pour les relancer. Sans connexion réussie d\'ici 30 jours, tes données seront supprimées.')],
     });
 }
 
@@ -576,15 +627,21 @@ async function checkAllUsers(client: Client) {
     for (const userId of Object.keys(data.users)) {
         const creds = data.users[userId];
         if (!creds) continue; // déconnecté pendant le cycle
+        if (creds.refusedAt && Date.now() - creds.refusedAt >= REFUSED_FORGET_MS) {
+            forgetAccount(userId);
+            log('AUTH', `${userId} : mot de passe refusé depuis ${REFUSED_FORGET_MS / 86_400_000} jours, compte oublié.`);
+            continue;
+        }
         let memo = memos.get(creds);
         if (!memo) memos.set(creds, (memo = { gradesAt: 0, absencesAt: 0, agendaAt: 0 }));
 
         const alerts = getUserAlerts(data, userId);
         const now = Date.now();
-        const wantsGrades = alerts.grades && now - memo.gradesAt >= REFRESH_MS;
-        const wantsAbsences = alerts.absences && now - memo.absencesAt >= REFRESH_MS;
-        const projectsStale = now - (memo.projects?.at ?? 0) >= REFRESH_MS;
-        const wantsAgenda = (alerts.agenda && now - memo.agendaAt >= REFRESH_MS) || digestDue(alerts, now);
+        const refresh = alerts.dmClosed ? CLOSED_DM_REFRESH_MS : REFRESH_MS;
+        const wantsGrades = alerts.grades && now - memo.gradesAt >= refresh;
+        const wantsAbsences = alerts.absences && now - memo.absencesAt >= refresh;
+        const projectsStale = now - (memo.projects?.at ?? 0) >= refresh;
+        const wantsAgenda = (alerts.agenda && now - memo.agendaAt >= refresh) || digestDue(alerts, now);
         if (!wantsGrades && !wantsAbsences && !alerts.reminders && !wantsAgenda) continue;
 
         // Une session (et donc un appel MyGes) n'est nécessaire que pour relire

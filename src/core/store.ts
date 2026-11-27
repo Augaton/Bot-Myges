@@ -53,10 +53,28 @@ export interface UserAlerts {
     // Cours à venir lors de la dernière lecture de l'agenda, chiffrés.
     agendaSnapshot?: EncryptedData;
     digestSentOn?: string; // jour (AAAA-MM-JJ) du dernier programme du matin
+    // Vrai depuis qu'un MP n'a pu être remis (MP fermés, plus de serveur en commun) :
+    // MyGes n'est plus relu qu'une fois par jour. Un MP remis le remet à faux.
+    dmClosed?: boolean;
+}
+
+/** Identifiants MyGes d'un utilisateur, chiffrés. */
+export interface Credentials {
+    user: EncryptedData;
+    pass: EncryptedData;
+    // Date (ms) du premier refus de ce mot de passe par MyGes : au bout de 30 jours sans
+    // connexion réussie, le compte est oublié (voir tasks/personalAlerts).
+    refusedAt?: number;
+    // Date (ms) du dernier essai refusé. Un essai par jour au plus, même après un
+    // redémarrage : assez rare pour ne pas faire verrouiller le compte, assez pour
+    // repartir seul si MyGes s'est trompé (panne qui répond 401 à tout le monde).
+    // Un nouveau /login remplace l'objet, et efface donc ces trois champs.
+    retriedAt?: number;
+    refusedNotified?: boolean; // MP « alertes en pause » déjà envoyé
 }
 
 export interface SavedData {
-    users: { [discordId: string]: { user: EncryptedData; pass: EncryptedData; refusedNotified?: boolean } };
+    users: { [discordId: string]: Credentials };
     guilds: { [guildId: string]: GuildConfig };
     alerts: { [discordId: string]: UserAlerts };
     // Secret du lien d'abonnement d'agenda, chiffré comme les identifiants.
@@ -227,6 +245,8 @@ const restoring = new Map<string, Promise<GesAuthenticationToken | null>>();
 const failures = new Map<string, { at: number; badCredentials: boolean }>();
 // MyGes en panne : on ne le relance pas à chaque commande.
 const RETRY_AFTER_FAILURE_MS = 60_000;
+// Mot de passe refusé : un nouvel essai par jour au plus (voir Credentials.retriedAt).
+const RETRY_AFTER_REFUSAL_MS = 24 * 60 * 60 * 1000;
 
 /** Retire aux autres comptes de la machine tout accès à ces fichiers (au démarrage). */
 export function tightenPermissions(files: string[]) {
@@ -252,6 +272,7 @@ export function sessionCount(): number {
 
 /** Cause du dernier échec de reconnexion, pour un message d'erreur précis. */
 export function loginFailure(userId: string): 'bad-credentials' | 'unavailable' | null {
+    if (loadData().users[userId]?.refusedAt) return 'bad-credentials';
     const f = failures.get(userId);
     if (!f) return null;
     return f.badCredentials ? 'bad-credentials' : 'unavailable';
@@ -269,20 +290,37 @@ export function closeSession(userId: string) {
 }
 
 /**
+ * Identifiants refusés : on n'insiste pas, des essais répétés avec un mot de passe
+ * périmé risqueraient de faire verrouiller le compte MyGes. Un essai par jour au plus,
+ * retenu sur disque (voir Credentials.retriedAt). Après une panne, on attend un peu.
+ */
+function loginBlocked(userId: string): boolean {
+    const retriedAt = loadData().users[userId]?.retriedAt;
+    if (retriedAt && Date.now() - retriedAt < RETRY_AFTER_REFUSAL_MS) return true;
+    const failure = failures.get(userId);
+    return !!failure && !failure.badCredentials && Date.now() - failure.at < RETRY_AFTER_FAILURE_MS;
+}
+
+/** Retient sur disque que MyGes refuse ces identifiants (voir Credentials.refusedAt). */
+function markRefused(creds: Credentials) {
+    creds.refusedAt ??= Date.now();
+    creds.retriedAt = Date.now();
+    saveData();
+}
+
+/** Connexion réussie avec ces identifiants : un refus passé était une erreur de MyGes. */
+function clearRefusal(creds: Credentials) {
+    if (!creds.refusedAt && !creds.retriedAt && !creds.refusedNotified) return;
+    delete creds.refusedAt;
+    delete creds.retriedAt;
+    delete creds.refusedNotified;
+    saveData();
+}
+
+/**
  * Session MyGes de l'utilisateur, rétablie si besoin à partir des identifiants
  * enregistrés. null s'il n'a pas de compte ou si la reconnexion échoue.
  */
-/**
- * Identifiants refusés : on n'insiste pas, des essais répétés avec un mot de passe
- * périmé risqueraient de faire verrouiller le compte MyGes. Seul un nouveau /login
- * lève le blocage. Après une panne, on attend un peu avant de réessayer.
- */
-function loginBlocked(userId: string): boolean {
-    const failure = failures.get(userId);
-    if (!failure) return false;
-    return failure.badCredentials || Date.now() - failure.at < RETRY_AFTER_FAILURE_MS;
-}
-
 export async function getSession(userId: string): Promise<GesAuthenticationToken | null> {
     const active = sessions.get(userId);
     if (active) return active;
@@ -301,13 +339,14 @@ export async function getSession(userId: string): Promise<GesAuthenticationToken
     return pending;
 }
 
-async function restore(userId: string, creds: SavedData['users'][string]): Promise<GesAuthenticationToken | null> {
+async function restore(userId: string, creds: Credentials): Promise<GesAuthenticationToken | null> {
     try {
         const token = await GesAPI.login(decrypt(creds.user), decrypt(creds.pass));
         // Entre-temps, l'utilisateur a pu se déconnecter ou se reconnecter avec
         // d'autres identifiants : on ne réinstalle pas une session périmée.
         if (loadData().users[userId] !== creds) return sessions.get(userId) ?? null;
         failures.delete(userId);
+        clearRefusal(creds);
         const session = makeSession(userId, token);
         sessions.set(userId, session);
         log('AUTH', `Session MyGes rétablie pour ${userId}.`);
@@ -315,8 +354,13 @@ async function restore(userId: string, creds: SavedData['users'][string]): Promi
     } catch (e) {
         const badCredentials = e instanceof BadCredentialsError;
         failures.set(userId, { at: Date.now(), badCredentials });
-        if (badCredentials) logError('AUTH', `Reconnexion de ${userId} : identifiants refusés par MyGes (refaire /login).`);
-        else logError('AUTH', `Reconnexion de ${userId} impossible :`, e);
+        if (badCredentials) {
+            // Sauf si un /logout ou un /login a remplacé ces identifiants entre-temps.
+            if (loadData().users[userId] === creds) markRefused(creds);
+            logError('AUTH', `Reconnexion de ${userId} : identifiants refusés par MyGes (refaire /login).`);
+        } else {
+            logError('AUTH', `Reconnexion de ${userId} impossible :`, e);
+        }
         return null;
     }
 }
@@ -352,6 +396,7 @@ async function refreshToken(userId: string): Promise<GesAuthenticationToken | nu
     try {
         const fresh = await GesAPI.login(decrypt(creds.user), decrypt(creds.pass));
         failures.delete(userId);
+        if (loadData().users[userId] === creds) clearRefusal(creds);
         log('AUTH', `Token rafraîchi pour ${userId}.`);
         return fresh;
     } catch (e) {
@@ -362,6 +407,7 @@ async function refreshToken(userId: string): Promise<GesAuthenticationToken | nu
         if (badCredentials) {
             // Mot de passe changé côté MyGes : la session n'est plus récupérable.
             sessions.delete(userId);
+            markRefused(creds);
             logError('AUTH', `Rafraîchissement pour ${userId} : identifiants refusés par MyGes (refaire /login).`);
         } else {
             logError('AUTH', `Échec du rafraîchissement de token pour ${userId} :`, e);
